@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "football-stats/verify-report.schema.json",
+  "title": "football-stats verify report (stdout)",
+  "$defs": {
+    "difference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_row_number", "field", "source", "database"],
+      "properties": {
+        "source_row_number": {"type": "integer", "minimum": 1},
+        "field": {"enum": ["match_date", "home_team_key", "away_team_key", "ft_home_goals", "ft_away_goals", "row"]},
+        "source": {"type": ["string", "null"]},
+        "database": {"type": ["string", "null"]}
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "checked", "differences"],
+      "properties": {
+        "status": {"const": "succeeded"},
+        "checked": {"type": "integer", "minimum": 0},
+        "differences": {"type": "array", "maxItems": 0}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "error", "message", "checked", "differences"],
+      "properties": {
+        "status": {"const": "failed"},
+        "error": {"const": "verification_failed"},
+        "message": {"type": "string"},
+        "checked": {"type": "integer", "minimum": 1},
+        "differences": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/difference"}}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "error", "message"],
+      "properties": {
+        "status": {"const": "failed"},
+        "error": {"enum": ["unexpected_error", "configuration_error", "source_unavailable", "database_error"]},
+        "message": {"type": "string"}
+      }
+    }
+  ]
+}

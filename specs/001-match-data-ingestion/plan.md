@@ -54,9 +54,9 @@ No `NEEDS CLARIFICATION` items remain; all were resolved in research.md.
 
 | Principle / standard | How this plan complies | Evidence (test / artifact) |
 |---|---|---|
-| **I. No silent data loss** — every row loaded or recorded with reason | Each record is either accepted or excluded with one reason (R6); excluded rows persisted with raw content (`excluded_rows`); unparseable optional values are excluded, never nulled; empty lines counted | `test_partition_accounts_for_every_row`, `test_each_reason_persisted_with_raw_record`, `test_read_source_counts_blank_line_as_record` |
+| **I. No silent data loss** — every row loaded or recorded with reason | Each record is either accepted or excluded with one reason (R6); excluded rows persisted with raw content in `excluded_rows` — this **is** the constitution's `rejected_rows` table, named with the spec's term (data-model.md §1.5); unparseable optional values are excluded, never nulled; empty lines counted; rows with a wrong field count abort the run (polars would pad them silently, R4) | `test_partition_accounts_for_every_row`, `test_each_reason_persisted_with_raw_record`, `test_read_source_counts_blank_line_as_record`, `test_read_source_malformed_raises` |
 | I. Explicit schema before clean layers | 48-column source contract + strict parsers (`source_contract.py`); full pandera contracts are Phase 2 as the spec states | `test_check_header_*`, `test_source_contract_matches_db_columns` |
-| I. Row counts reconcile and are logged | `rows_read = rows_loaded + rows_excluded` asserted in Python, enforced by a CHECK on `ingest_runs`, logged and printed per run | `test_ingest_report_counts`, `test_ingest_runs_check_rejects_unbalanced_counts` |
+| I. Row counts reconcile and are logged | `rows_read = rows_loaded + rows_excluded` checked in Python (explicit `AccountingError`, not `assert`), enforced by a CHECK on `ingest_runs`, reconciled against table contents, logged and printed per run | `test_ingest_report_counts`, `test_partition_rejects_inconsistent_counts`, `test_ingest_runs_check_rejects_unbalanced_counts`, `test_db_reconciles_with_run_counts` |
 | **II. Idempotent pipelines** | Natural-key upserts for every table; excluded rows keyed by `(source_sha256, source_row_number)` | `test_second_run_leaves_identical_state` |
 | II. Raw data kept unchanged | Content-addressed read-only raw copy, atomic rename (R13) | `test_download_keeps_unmodified_copy` |
 | II. Safe to retry after partial failure | Single transaction + advisory lock; failed runs leave no DB trace | `test_db_failure_mid_load_rolls_back`, `test_concurrent_run_rejected` |
@@ -117,7 +117,7 @@ reference them.
 | Req | What is verified | Test(s) (file :: name) |
 |---|---|---|
 | FR-001 | raw file downloaded, unmodified, content-addressed, kept per run; `file://` and HTTP | `integration/test_extract_download.py::test_download_keeps_unmodified_copy`, `::test_download_http_loopback_streams_and_hashes`, `::test_existing_raw_copy_reused`; `integration/test_ingest_pipeline.py::test_run_records_source_and_raw_path` |
-| FR-002 | missing/renamed/duplicate columns stop the run, error names columns, DB untouched | `unit/test_validate_header.py::test_check_header_names_all_missing_columns`, `::test_check_header_rejects_duplicate_names`, `unit/test_extract_read.py::test_read_source_malformed_raises`, `::test_check_header_ignores_order_and_allows_extra`; `integration/test_ingest_pipeline.py::test_missing_columns_stops_before_db` |
+| FR-002 | missing/renamed/duplicate columns stop the run, error names columns, DB untouched | `unit/test_validate_header.py::test_check_header_names_all_missing_columns`, `::test_check_header_rejects_duplicate_names`, `::test_check_header_ignores_order_and_allows_extra`; `unit/test_extract_read.py::test_read_source_malformed_raises` (47- and 49-field rows, invalid UTF-8), `::test_check_structure_accepts_valid_and_blank_lines`; `integration/test_ingest_pipeline.py::test_missing_columns_stops_before_db` |
 | FR-003 | ISO dates parsed; invalid dates excluded `invalid_date` | `unit/test_clean_parsers.py::test_parse_date_valid`, `::test_parse_date_invalid`; `unit/test_validate_rows.py::test_invalid_date_excluded` |
 | FR-004 | trim, collapse, casefold, NFC; one team per key; deterministic display name | `unit/test_clean_team_names.py::test_team_key_normalizes_formatting`, `::test_team_key_is_idempotent`, `::test_canonical_name_most_frequent_then_lexicographic`; `integration/test_ingest_pipeline.py::test_team_spelling_variants_single_team` |
 | FR-005 | optional missing → NULL and loaded; required missing → excluded naming the field; missing result | `unit/test_validate_rows.py::test_missing_required_field_excluded` (parametrized ×4 + blank), `::test_missing_result_excluded`, `::test_optional_stats_missing_loaded_as_null`; `integration/test_ingest_pipeline.py::test_optional_nulls_stored_as_null` |
@@ -125,18 +125,19 @@ reference them.
 | FR-007 | leagues/teams/matches with FKs; each match → 1 league, 2 teams | `unit/test_clean_build.py::test_build_entities`, `::test_team_in_multiple_leagues_single_team`; `integration/test_migrations.py::test_upgrade_creates_schema`; `integration/test_ingest_pipeline.py::test_ingest_loads_valid_fixture` |
 | FR-008 | home ≠ away and FK integrity enforced by DB; pipeline excludes `same_team` first | `integration/test_constraints.py::test_constraint_rejects_home_equals_away`, `::test_constraint_rejects_unknown_league`, `::test_constraint_rejects_unknown_team`; `unit/test_validate_rows.py::test_same_team_after_normalization_excluded` |
 | FR-009 | schema only via Alembic; upgrade from empty; re-apply no-op; downgrade round-trip | `integration/test_migrations.py::test_upgrade_creates_schema`, `::test_upgrade_is_noop_at_head`, `::test_downgrade_then_upgrade_roundtrip`, `::test_source_contract_matches_db_columns` |
-| FR-010 | report read/loaded/excluded + per reason; read = loaded + excluded | `unit/test_accounting.py::test_partition_accounts_for_every_row`, `::test_report_counts_per_reason`; `integration/test_ingest_pipeline.py::test_ingest_report_counts`; `integration/test_constraints.py::test_ingest_runs_check_rejects_unbalanced_counts`; `integration/test_cli.py::test_cli_ingest_report_matches_schema` |
-| FR-011 | second run → identical tables (incl. ids), no duplicate excluded rows | `integration/test_idempotency.py::test_second_run_leaves_identical_state`, `::test_second_run_reports_all_unchanged` |
+| FR-010 | report read/loaded/excluded + per reason; read = loaded + excluded | `unit/test_accounting.py::test_partition_accounts_for_every_row`, `::test_report_counts_per_reason`, `::test_partition_rejects_inconsistent_counts`; `integration/test_ingest_pipeline.py::test_ingest_report_counts`; `integration/test_constraints.py::test_ingest_runs_check_rejects_unbalanced_counts`; `integration/test_cli.py::test_cli_ingest_report_matches_schema` |
+| FR-011 | second run → identical tables (incl. ids), no duplicate excluded rows | `integration/test_idempotency.py::test_second_run_leaves_identical_state`, `::test_second_run_reports_all_unchanged`, `::test_changed_source_updates_match_in_place` (new source version: 0 inserted, all re-stamped, ids stable) |
 | FR-012 | DB failure mid-load, download failure, header failure, concurrent run → DB unchanged | `integration/test_atomicity.py::test_db_failure_mid_load_rolls_back` (empty and preloaded DB), `::test_concurrent_run_rejected`; `integration/test_extract_download.py::test_interrupted_download_leaves_no_file_and_db_unchanged`; `integration/test_ingest_pipeline.py::test_missing_columns_stops_before_db` |
 | FR-013 | each exclusion persisted with raw content, reason, run | `integration/test_excluded_rows.py::test_each_reason_persisted_with_raw_record`, `::test_excluded_rows_link_to_run` |
 | SC-001 | ≤ 2 commands, < 10 min from fresh checkout | **Manual, measured** (quickstart §1); automated container path covered by `scripts/smoke_compose.sh` in CI |
 | SC-002 | full load < 5 min | **Manual, measured** (quickstart §2; research.md R25 explains why not asserted) |
-| SC-003 | 100% of rows accounted for | `unit/test_accounting.py::test_partition_accounts_for_every_row` (all fixtures); `integration/test_ingest_pipeline.py::test_ingest_report_counts`, `::test_db_reconciles_with_run_counts` |
-| SC-004 | 0 differences in date/teams/score vs source | `integration/test_verify.py::test_every_loaded_match_equals_source` (stdlib-csv oracle, all rows), `::test_verify_command_reports_no_differences`, `::test_verify_detects_tampered_row`; real data: quickstart §9 |
+| SC-003 | 100% of rows accounted for | `unit/test_accounting.py::test_partition_accounts_for_every_row` (all fixtures); `integration/test_ingest_pipeline.py::test_ingest_report_counts`; `integration/test_excluded_rows.py::test_db_reconciles_with_run_counts` (US3; edge-case and real-sample fixtures) |
+| SC-004 | 0 differences in date/teams/score vs source | `integration/test_verify.py::test_every_loaded_match_equals_source` (stdlib-csv oracle, all rows), `::test_verify_command_reports_no_differences`, `::test_verify_detects_tampered_row`, `::test_verify_sample_is_seeded`, `::test_verify_cli_report_matches_schema`; real data: quickstart §9 |
 | SC-005 | identical counts after two runs | `integration/test_idempotency.py::test_second_run_leaves_identical_state` |
 | SC-006 | each team once despite whitespace/casing | `unit/test_clean_team_names.py::test_team_key_normalizes_formatting`; `integration/test_ingest_pipeline.py::test_team_spelling_variants_single_team` |
 | US1-2 | query by league + season (date range) | `integration/test_ingest_pipeline.py::test_query_by_league_and_date_range` |
 | US2-1 | DB available without manual config | `scripts/smoke_compose.sh` (CI) |
+| Edge: DB unreachable | exit 7 `database_error`, not 1 | `integration/test_cli.py::test_cli_exit_codes` |
 | Edge: unreachable / interrupted source | exit 3, DB unchanged, no partial file | `integration/test_extract_download.py::test_unreachable_source_raises`, `::test_interrupted_download_leaves_no_file_and_db_unchanged`; `integration/test_cli.py::test_cli_exit_codes` |
 | Edge: header-only file | succeeds with 0/0/0 | `integration/test_ingest_pipeline.py::test_header_only_file_loads_nothing` |
 
@@ -152,7 +153,8 @@ is recorded in a sidecar JSON so tests are table-driven.
 | `matches_missing_columns.csv` | header without `FTHome`, `AwayTeam` renamed `Away_Team`; 2 rows | FR-002 |
 | `matches_duplicate_header.csv` | header with `HomeTeam` twice | FR-002 |
 | `matches_header_only.csv` | header, no rows | edge |
-| `matches_ragged.csv` | one row with 47 fields | FR-002/R4 malformed source (exit 4) |
+| `matches_ragged_short.csv` | one row with 47 fields (polars alone would pad it with null) | R4 structure check (exit 4) |
+| `matches_ragged_long.csv` | one row with 49 fields | R4 structure check (exit 4) |
 | `matches_invalid_utf8.csv` | byte `0xFF` inside a team name | R4 malformed source (exit 4) |
 | `matches_real_sample.csv` | header + real rows from the pinned file: data records 1–10 and file lines 64347 (`Ajax `), 73508 (`Colon Santa FE`), 192326 (`Colon Santa Fe`), 112582 (missing result), 174503 (`King\u0092s Lynn`), 230559 (empty line) | realism check of parsers on real formatting |
 
@@ -168,7 +170,8 @@ specs/001-match-data-ingestion/
 ├── quickstart.md        # Phase 1: manual acceptance run
 ├── contracts/
 │   ├── cli.md                    # CLI, env, exit codes, Compose commands
-│   └── run-report.schema.json    # stdout report JSON Schema
+│   ├── run-report.schema.json    # ingest stdout report JSON Schema
+│   └── verify-report.schema.json # verify stdout report JSON Schema
 └── tasks.md             # Phase 2 (/speckit-tasks)
 ```
 
@@ -246,6 +249,6 @@ No constitution violations. Items a reviewer might question, with justification:
 | Item | Why needed | Simpler alternative rejected because |
 |---|---|---|
 | `verify` subcommand | SC-004 must be checkable on the real dataset, which tests cannot download | manual psql comparison of 48 columns is error-prone and unrepeatable |
-| Advisory lock | Two concurrent runs can deadlock on the unique index; Principle II retry safety | relying on "don't do that" leaves a real failure mode untested |
+| Advisory lock | A second concurrent run would otherwise block silently on the first run's row locks and then redo all work; the lock turns that into an immediate, explicit exit 5 (`concurrent_run`). Transaction-scoped, so it is always released (Principle II retry safety). One statement + one test | relying on "don't do that" leaves an untested, confusing failure mode |
 | `invalid_value` / `same_team` reasons beyond the spec's examples | constraint parity: without them a single bad value aborts the whole run (FR-012) or is silently nulled (Principle I) | nulling bad optional values = silent data loss |
 | pytest-randomly, pytest-socket, jsonschema (dev only) | enforce no order reliance, no network in unit tests, and the report contract | conventions without enforcement drift |

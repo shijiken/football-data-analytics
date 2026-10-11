@@ -109,6 +109,9 @@ Table-level checks:
 
 ### 1.5 `excluded_rows` (FR-013, US3)
 
+This is the constitution's `rejected_rows` table (Principle I) under the spec's terminology
+("excluded"); one name is used throughout code, schema and docs to avoid a split vocabulary.
+
 | Column | Type | Null | Constraint |
 |---|---|---|---|
 | `excluded_row_id` | `bigint GENERATED ALWAYS AS IDENTITY` | NO | **PK** |
@@ -136,14 +139,16 @@ have the same column set and types (`test_source_contract_matches_db_columns`).
 
 ### 2.1 Parsers (strict, regex-first, no locale)
 
-All values are first stripped of surrounding whitespace; empty → null.
+All values are first stripped of surrounding whitespace; empty → null. Regexes use `[0-9]`, never
+`\d` (which is Unicode-aware in both Rust regex and Python `re` and would accept e.g. `٣`, which the
+subsequent cast cannot convert — that would break constraint parity).
 
 | Parser | Accepts | Result | Otherwise |
 |---|---|---|---|
-| `date` | `^\d{4}-\d{2}-\d{2}$` and a real calendar date | `date` | `invalid_date` |
-| `time` | `^\d{2}:\d{2}:\d{2}$`, `00–23:00–59:00–59` | `time` | `invalid_value` |
-| `count` | `^\d+(\.0+)?$`, value ≤ 32767 | `smallint` | `invalid_value` (covers negatives, fractions, `nan`) |
-| `decimal` | `^-?\d+(\.\d+)?$` | `float64` | `invalid_value` (covers `nan`, `inf`, `1e5`, `,` decimals) |
+| `date` | `^[0-9]{4}-[0-9]{2}-[0-9]{2}$` and a real calendar date | `date` | `invalid_date` |
+| `time` | `^[0-9]{2}:[0-9]{2}:[0-9]{2}$`, `00–23:00–59:00–59` | `time` | `invalid_value` |
+| `count` | `^[0-9]+(\.0+)?$`, value ≤ 32767 | `smallint` | `invalid_value` (covers negatives, fractions, `nan`, non-ASCII digits such as `٣`) |
+| `decimal` | `^-?[0-9]+(\.[0-9]+)?$` | `float64` | `invalid_value` (covers `nan`, `inf`, `1e5`, `,` decimals) |
 | `result` | `H`, `D`, `A` | `char(1)` | `invalid_value` |
 | `league` | after upper-casing: `^[A-Z0-9]{1,10}$` | `text` | `invalid_value` |
 | `team` | any non-blank text | name + key (R7) | blank → `missing_field` |
@@ -190,7 +195,8 @@ read ──► header-checked ──► parsed ──► { accepted ──► up
 - `rows_read` = records after the header (an empty line is a record).
 - `rows_loaded` = accepted records (each upserted: inserted, updated, or unchanged).
 - `rows_excluded` = excluded records; `rows_read = rows_loaded + rows_excluded` is checked in Python
-  before the transaction (assertion → run fails) **and** by the `ingest_runs` CHECK.
+  before the transaction (explicit `AccountingError`, exit 8 — not `assert`, which `python -O` strips)
+  **and** by the `ingest_runs` CHECK.
 
 Upsert semantics on re-run (R11, R12):
 
@@ -198,7 +204,7 @@ Upsert semantics on re-run (R11, R12):
 |---|---|---|
 | leagues | `league_code` | do nothing |
 | teams | `team_key` | update `name` only if different |
-| matches | `matches_natural_key` | update all non-key columns (incl. `source_sha256`, `source_row_number`) only if any differs |
+| matches | `matches_natural_key` | update all non-key columns (incl. `source_sha256`, `source_row_number`) only if any differs — so the same file updates nothing, and a new file version re-stamps every match it contains (research.md R12) |
 | excluded_rows | `(source_sha256, source_row_number)` | update `reason`, `detail`, `raw_record` only if different; keep `run_id` |
 
 Rows are never deleted by ingestion in this feature (a match that disappears from a newer source

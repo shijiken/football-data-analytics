@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "football-stats/run-report.schema.json",
-  "title": "football-stats ingest report (stdout)",
+  "title": "football-stats ingest report (stdout); also the generic failure shape of verify",
   "oneOf": [
     {
       "type": "object",
@@ -47,7 +47,7 @@
         "status": {"const": "failed"},
         "error": {
           "enum": ["unexpected_error", "configuration_error", "source_unavailable", "missing_columns",
-                   "malformed_source", "concurrent_run", "database_error"]
+                   "malformed_source", "concurrent_run", "database_error", "accounting_error"]
         },
         "message": {"type": "string"}
       }

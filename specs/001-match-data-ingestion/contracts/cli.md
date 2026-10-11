@@ -4,7 +4,9 @@
 
 Entry point: `[project.scripts] football-stats = "football_stats.cli:main"`.
 Standard streams: **stdout** carries exactly one JSON document (the report) on success *and* on
-handled failure; **stderr** carries log lines. Nothing else is written to stdout.
+handled failure; **stderr** carries log lines. Nothing else is written to stdout. The `ingest`
+report follows [run-report.schema.json](./run-report.schema.json); the `verify` report follows
+[verify-report.schema.json](./verify-report.schema.json).
 
 ## Environment
 
@@ -55,16 +57,26 @@ Failure report (exit ≠ 0):
 
 ## `football-stats verify [--sample N] [--seed S] [--source-file PATH]`
 
-Compares N (default 20) seeded-random accepted source rows (default seed 42) with the database
-(date, home team, away team, FT score), using the raw file of the latest run unless `PATH` is given.
-`--sample 0` means all rows.
+Compares N (default 20) seeded-random accepted source rows (default seed 42) with the database,
+using the raw file of the latest run unless `PATH` is given. `--sample 0` means all rows.
+Comparison rules (research.md R24): date as ISO string; teams as `team_key(source) ==
+teams.team_key` (not display names); FT goals as integers.
 
 ```json
 {"status": "succeeded", "checked": 20, "differences": []}
 ```
 
-On differences: `"status": "failed", "error": "verification_failed"`, `differences` lists
-`{"source_row_number": n, "field": "...", "source": "...", "database": "..."}`; exit 6.
+On differences (exit 6):
+
+```json
+{"status": "failed", "error": "verification_failed", "message": "1 difference(s) in 20 checked rows",
+ "checked": 20,
+ "differences": [{"source_row_number": 7, "field": "ft_home_goals", "source": "2", "database": "3"}]}
+```
+
+`field` is one of `match_date`, `home_team_key`, `away_team_key`, `ft_home_goals`,
+`ft_away_goals`, `row` (no DB row for an accepted source row). Other `verify` failures (no run
+yet, raw file missing, DB unreachable) use the generic failure shape with exit 2/3/7.
 
 ## Exit codes
 
@@ -74,10 +86,11 @@ On differences: `"status": "failed", "error": "verification_failed"`, `differenc
 | 1 | `unexpected_error` | any unhandled exception (logged with traceback) | no (rolled back) |
 | 2 | `configuration_error` | bad/missing env var or CLI usage (argparse also uses 2) | no |
 | 3 | `source_unavailable` | download failed, timed out, short read, file not found | no |
-| 4 | `missing_columns` / `malformed_source` | FR-002 header check failed, or file not parseable as CSV/UTF-8 | no |
+| 4 | `missing_columns` / `malformed_source` | FR-002 header check failed (missing or duplicate columns), or file not parseable: invalid UTF-8, a record whose field count is neither 0 nor the header's | no |
 | 5 | `concurrent_run` | another ingest holds the advisory lock | no |
 | 6 | `verification_failed` | `verify` found differences | no |
-| 7 | `database_error` | DB unreachable or a statement failed during load | no (rolled back) |
+| 7 | `database_error` | DB unreachable (connection refused/failed) or a statement failed during load | no (rolled back) |
+| 8 | `accounting_error` | internal invariant `rows_read = accepted + excluded` violated before loading | no |
 
 ## Structure command (FR-009)
 

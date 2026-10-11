@@ -69,7 +69,7 @@ Measured on the pinned file (238,859 data records):
 | Home = away after normalization | 0 | Same. |
 | Invalid / non-ISO dates | 0 (all `YYYY-MM-DD`) | Strict single-format parser is sufficient. |
 | `MatchTime` present | 107,373 (all `HH:MM:SS`, from 2012 on) | Optional; strict `HH:MM:SS`. Source says times are "CET-1"; stored as `time` without zone, documented. |
-| Integer-valued columns written as floats (`3.0`) | all goal/stat/form columns | Parse `^\d+(\.0+)?$` → integer; anything else is `invalid_value`. |
+| Integer-valued columns written as floats (`3.0`) | all goal/stat/form columns | Parse `^[0-9]+(\.0+)?$` → integer; anything else is `invalid_value`. |
 | `FTResult` inconsistent with `FTHome`/`FTAway` | 0 | Not checked in this feature (spec limits checks to FR-002…FR-006); candidate for Phase 2 contracts. |
 | HT fields partially present | 0 (all three present or all three absent) | No cross-field HT rule needed. |
 | Odds equal to `0.0`, `HandiSize` = `-99.9` | a few | Source quirks; stored as-is. Domain rules on odds are Phase 2 (pandera). |
@@ -86,8 +86,7 @@ leagues 38; teams 1,221 (counted from accepted rows only). These numbers are a m
 
 **Rationale**: Reading everything as strings and parsing explicitly makes every conversion a
 visible, testable rule; nothing is coerced silently (pandas turns integer columns with nulls into
-floats and infers dtypes per chunk). polars is strictly typed, ships type stubs (mypy), errors on
-ragged lines by default, and processes 239k × 48 in well under a second, leaving the SC-002 budget
+floats and infers dtypes per chunk). polars is strictly typed, ships type stubs (mypy), and processes 239k × 48 in well under a second, leaving the SC-002 budget
 to the database load.
 
 **Alternatives rejected**: pandas (silent dtype inference, `skip_blank_lines=True` by default would
@@ -101,10 +100,16 @@ evaluation and grouping over 239k rows is slower and more code).
    body. The check fails on missing columns and on duplicate column names; it names every missing
    column. Extra columns are allowed, logged as a warning, kept in `raw_record` for excluded rows,
    and otherwise ignored.
-2. Read the body with `pl.read_csv(path, infer_schema=False, encoding="utf8")`; add
+2. Check the file structure with one stdlib-`csv` pass (`extract.check_structure`, strict UTF-8):
+   every record must have either 0 fields (empty line) or exactly `len(header)` fields; otherwise
+   `MalformedSourceError` naming the 1-based record number and its field count. This is needed
+   because polars 1.x **silently pads short rows with nulls** (verified by the plan reviewer on
+   polars 1.44.2: `"1,2"` under header `a,b,c` → `('1','2',None)`) and only raises for rows with
+   too many fields. Cost: about one second on 239k rows.
+3. Read the body with `pl.read_csv(path, infer_schema=False, encoding="utf8")`; add
    `source_row_number` (1-based index of the data record; header is not counted; an empty line is
    a record).
-3. Structural errors (invalid UTF-8, ragged rows, unterminated quotes) abort the run before the
+4. Structural errors (invalid UTF-8, short or long rows, unterminated quotes) abort the run before the
    database is touched (exit code 4). They are file-level faults, not row-level ones.
 
 **Rationale**: polars silently renames duplicate headers (`X_duplicated_0`), so the header must be
@@ -112,9 +117,15 @@ inspected raw. Checking the header first gives the clear, early error FR-002 ask
 structural corruption as fatal keeps row-level exclusion reasons meaningful and leaves the DB
 unchanged (FR-012).
 
-**Alternatives rejected**: `truncate_ragged_lines=True` (silently drops data, violates Principle I);
-excluding ragged rows individually (requires a hand-written CSV tokenizer; no such rows exist in the
-source; can be added in Phase 2 if needed).
+**Alternatives rejected**: relying on polars alone (pads short rows silently — Principle I violation);
+`truncate_ragged_lines=True` (silently drops data, violates Principle I);
+excluding wrong-width rows individually as a seventh reason (a wrong field count means the
+values cannot be mapped to columns reliably, and in a generated CSV it signals file corruption or a
+bad download rather than one bad record; the measured source has 0 such rows; can be revisited in
+Phase 2 with the data contracts).
+
+`test_read_source_malformed_raises` is parametrized with a 47-field row (which polars alone would
+accept) and a 49-field row, so a regression in `check_structure` fails the gate.
 
 The behaviour "an empty line is read as one all-null record" is pinned by a unit test
 (`test_read_source_counts_blank_line_as_record`), so a polars upgrade that changes it fails the
@@ -139,12 +150,12 @@ the first failing rule in this fixed order:
 
 | # | Code | Rule | Detail | Spec source |
 |---|---|---|---|---|
-| 1 | `missing_field` | `Division`, `MatchDate`, `HomeTeam` or `AwayTeam` is null or blank after trimming (an empty line fails here) | comma-separated missing column names, in contract order | FR-005 |
-| 2 | `invalid_date` | `MatchDate` does not match `^\d{4}-\d{2}-\d{2}$` or is not a real calendar date | the raw value | FR-003 |
-| 3 | `missing_result` | `FTHome`, `FTAway` or `FTResult` is null/blank | missing column names | FR-005, edge case "missing result" |
-| 4 | `invalid_value` | any present value fails its column type/domain (see data-model "Column contract"): non-integral or negative count, non-decimal float (incl. `nan`, `inf`, exponent), time not `HH:MM:SS`, result not in `H`/`D`/`A`, division not `^[A-Z0-9]{1,10}$` after normalization | failing source column names | Principle I (nothing nulled silently), parity with DB CHECKs |
-| 5 | `same_team` | normalized home team key = normalized away team key | the normalized key | FR-008 |
-| 6 | `duplicate` | same `(league_code, match_date, home_key, away_key)` as an earlier accepted row | `duplicate of source row N` | FR-006 |
+| 1 | `missing_field` | `Division`, `MatchDate`, `HomeTeam` or `AwayTeam` is null or blank after trimming (an empty line fails here) | missing column names in contract order, joined by `", "` — e.g. `HomeTeam`, `Division, MatchDate, HomeTeam, AwayTeam` | FR-005 |
+| 2 | `invalid_date` | `MatchDate` does not match `^[0-9]{4}-[0-9]{2}-[0-9]{2}$` or is not a real calendar date | the raw value as read, e.g. `2021-02-30` | FR-003 |
+| 3 | `missing_result` | `FTHome`, `FTAway` or `FTResult` is null/blank | missing column names joined by `", "`, e.g. `FTHome, FTAway, FTResult` | FR-005, edge case "missing result" |
+| 4 | `invalid_value` | any present value fails its column type/domain (see data-model "Column contract"): non-integral or negative count, non-decimal float (incl. `nan`, `inf`, exponent), time not `HH:MM:SS`, result not in `H`/`D`/`A`, division not `^[A-Z0-9]{1,10}$` after normalization | failing source column names in contract order joined by `", "`, e.g. `HomeShots` or `FTHome, OddHome` | Principle I (nothing nulled silently), parity with DB CHECKs |
+| 5 | `same_team` | normalized home team key = normalized away team key | the normalized team key, e.g. `ajax` | FR-008 |
+| 6 | `duplicate` | same `(league_code, match_date, home_key, away_key)` as an earlier accepted row | `duplicate of source row N`, e.g. `duplicate of source row 7` | FR-006 |
 
 **Rationale**:
 - One reason per row makes per-reason counts sum to `rows_excluded` (FR-010, SC-003). The detail
@@ -248,8 +259,10 @@ container); `CREATE TABLE IF NOT EXISTS` in app code (not versioned; violates FR
 
 **Rationale**: A single transaction is the simplest correct implementation of FR-012 (Postgres DDL
 and DML are transactional; temp tables vanish on rollback). Upserts on natural keys give FR-011
-without truncation. The advisory lock prevents two concurrent runs from interleaving upserts
-(deadlock risk on the unique index) and is retry-safe (Principle II). COPY keeps 239k rows well
+without truncation. The advisory lock makes a second concurrent run fail fast and explicitly (exit 5,
+`concurrent_run`) instead of silently blocking on row locks of the first run's uncommitted upserts
+until it finishes (and then redoing all the work); the lock is transaction-scoped, so it is released
+on commit, rollback or a dropped connection, keeping retries safe (Principle II). COPY keeps 239k rows well
 inside SC-002. Cleaning before opening the transaction keeps the lock/transaction short and means
 FR-002/parse failures never touch the DB.
 
@@ -267,6 +280,13 @@ state on failure, contradicting FR-012).
 and `excluded_rows` — **including surrogate ids** — are identical to after the first run.
 `ingest_runs` is an append-only audit log and gains one row per successful run (with identical
 counts). `excluded_rows.run_id` points to the first run that recorded the row.
+
+A **new** source version (different SHA-256) re-stamps provenance on every match it contains:
+`source_sha256`/`source_row_number` are part of the `IS DISTINCT FROM` comparison, so all of that
+file's matches count as `matches_updated` even if only one score changed. This is deliberate: it
+keeps `matches.source_sha256` pointing at the latest file, which the SC-003 reconciliation
+(quickstart §7), `test_db_reconciles_with_run_counts` and `verify` rely on. Re-running the **same**
+file updates nothing.
 
 Identity sequences may advance on conflicting inserts (Postgres evaluates the identity default
 before the conflict check); sequence positions are not part of the contract.
@@ -448,9 +468,13 @@ Compose smoke test exercises US2 and the container path of US1 automatically.
 ## R24. SC-004 spot check on real data: `verify` subcommand
 
 **Decision**: `football-stats verify --sample 20 --seed 42` re-reads the raw file for the latest run
-with the stdlib `csv` module, picks N accepted rows with `random.Random(seed)`, and compares date,
-home team, away team and full-time score with the database row linked by
-`(source_sha256, source_row_number)`. It prints a JSON report and exits 6 on any difference.
+with the stdlib `csv` module, picks N accepted rows with `random.Random(seed)`, and compares them
+with the database row linked by `(source_sha256, source_row_number)` using these exact rules:
+`MatchDate` (stripped) == `match_date.isoformat()`; `team_key(HomeTeam)` == home `teams.team_key`
+and likewise for away (keys, not display names, so `Ajax ` vs `Ajax` is not a difference);
+`int(float(FTHome))` == `ft_home_goals` and likewise for away. A source row that should be loaded
+but has no matching DB row is reported as a difference with field `row`. It prints a JSON report
+(schema `contracts/verify-report.schema.json`) and exits 6 on any difference.
 
 **Rationale**: SC-004 must be checkable on the real dataset, which tests cannot download. A seeded
 sample is reproducible. The integration test applies the same comparison to **all** fixture rows.
