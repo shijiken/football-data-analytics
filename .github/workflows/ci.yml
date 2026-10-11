@@ -14,3 +14,7 @@ jobs:
           version: "0.12.5"
       - run: uv sync --frozen
       - run: scripts/check.sh
+      - name: Build image
+        run: docker build -t football-stats:ci .
+      - name: Compose smoke test
+        run: scripts/smoke_compose.sh
