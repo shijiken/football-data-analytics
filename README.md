@@ -52,6 +52,10 @@ cp .env.example .env
 docker compose run --rm ingest
 ```
 
+If port 5432 is already in use on your machine (for example by a local PostgreSQL), set
+`POSTGRES_PORT` in `.env` to a free port such as `55432` before running. The containers talk to
+each other on the internal network, so only host access to the database uses this port.
+
 `docker compose up -d` starts only the database and applies the migration; the `ingest` job sits
 behind a Compose profile so it never re-downloads 45 MB by accident. The command prints one JSON
 report on stdout (logs go to stderr):
@@ -122,11 +126,16 @@ dataset.
 
 | Item | Value |
 |---|---|
-| SC-001 fresh checkout to loaded database (target under 10 min) | TODO(T053): not measured yet |
-| SC-002 download + clean + load of the full file (target under 5 min) | TODO(T053): not measured yet |
-| Machine (CPU / RAM / Docker) | TODO(T053) |
-| Real counts: rows read / loaded / excluded | TODO(T053) (expected 238,859 / 238,854 / 5) |
-| Real counts: leagues / teams | TODO(T053) (expected 38 / 1,221) |
+| SC-001 fresh checkout to loaded database (target under 10 min) | 23.6 s wall time for `docker compose run --rm ingest` on an empty database, base images already pulled (image build cached) |
+| SC-002 download + clean + load of the full file (target under 5 min) | 18.7 s (`duration_seconds` in the run report, first run); idempotent re-run 8.9 s |
+| Machine (CPU / RAM / Docker) | Apple M3 / 16 GB / Docker Engine 29.8.2 (Docker Desktop) |
+| Real counts: rows read / loaded / excluded | 238,859 / 238,854 / 5 (4 `missing_result`, 1 `missing_field`) |
+| Real counts: leagues / teams | 38 / 1,221 |
+
+Measured 2026-10-11 against the pinned source (sha256 `ef224cf2…4221`). The same run also confirmed
+the Premier League 2015/16 query returns 380 rows, a second ingest changes nothing (0 inserted,
+0 updated, 238,854 unchanged), `verify --sample 20 --seed 42` reports no differences, and an
+unreachable source exits 3 with the database unchanged.
 
 ## Repository layout
 

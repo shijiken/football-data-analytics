@@ -277,3 +277,18 @@ Reasoning: added `test_unresolvable_team_raises_accounting_error_and_rolls_back`
 ### C2-2: Empty `SOURCE_URL` was not pinned by a test
 Response: FIXED
 Reasoning: `test_config_defaults` now asserts that `SOURCE_URL` set to `""` and to `"   "` resolves to `PINNED_SOURCE_URL`, the path Compose uses.
+
+### O-1: T053 real-data run (orchestrator)
+
+Ran quickstart §1–§10 against the pinned source on 2026-10-11. Every expected value matched reality
+(238,859 / 238,854 / 5; 38 leagues; 1,221 teams; 380 E0 2015/16 rows; idempotent re-run; verify
+clean; unreachable source exit 3 with tables unchanged).
+
+- **Port collision**: the first attempt failed because a local PostgreSQL already listened on host
+  port 5432. Resolved by setting `POSTGRES_PORT=55432` in the local `.env`; the README now documents
+  this. No code change needed (the port was already configurable).
+- **SC-001 caveat**: the 23.6 s figure had base images already pulled and the build cached; a cold
+  machine adds image pull/build time. Still far below the 10-minute target.
+- **§10 wrong-columns case not run manually**: it bind-mounts `tests/fixtures` from `~/Desktop`,
+  which hung Docker Desktop on this Mac earlier (I-5). The behavior is covered by the gate's
+  integration tests for exit 4.
