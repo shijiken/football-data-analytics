@@ -187,3 +187,38 @@ This matches the `", "` join already used by `MissingColumnsError`.
 The reviewer asked for a code comment about relying on a Postgres implementation detail. T036
 now requires that comment, and it names the two tests that guard the behaviour
 (`test_second_run_reports_all_unchanged`, `test_changed_source_updates_match_in_place`).
+
+# Decisions: Implementation
+
+## I-1: Malformed-source test calls `check_structure`, not `read_source`
+Deviation: tasks.md T019 named `test_read_source_malformed_raises` and parametrized the 47-field,
+49-field and invalid-UTF-8 fixtures through it. Implemented as `test_malformed_source_raises`,
+which calls `check_structure(path, 48)` for all three fixtures. `test_read_source_malformed_raises`
+is kept with a single case: `read_source` on the 49-field file (polars' own `ComputeError`
+mapped to `MalformedSourceError`, defence in depth).
+Reasoning: plan-review-2 finding 1. `read_source` is plain `pl.read_csv`, which silently pads the
+47-field row, so only `check_structure` (called by the pipeline) can reject it. Making
+`read_source` call `check_structure` would read the file twice per run.
+
+## I-2: Team columns of the source contract
+Deviation: `ColumnSpec` rows for `HomeTeam`/`AwayTeam` use `db_column` `home_team`/`away_team`
+(parser `TEAM`), which are not columns of `matches` (the table stores `home_team_id`/`away_team_id`).
+`test_source_contract_matches_db_columns` therefore skips `TEAM` specs and asserts
+`home_team_id`/`away_team_id` (integer) plus the provenance columns instead. The parsed frame
+carries `home_team`/`away_team` (stripped names); `add_team_keys` derives the keys the loader
+resolves to ids.
+Reasoning: T010 says "every `ColumnSpec.db_column` exists in `matches`", which cannot hold for
+a name column that is replaced by a foreign key; this is the most conservative reading.
+
+## I-3: Source-tree import path on macOS
+Deviation: `pythonpath = ["src"]` added to the pytest configuration, and CLI subprocess tests
+set `PYTHONPATH=<repo>/src` in their explicit environment.
+Reasoning: on the development machine the macOS `hidden` file flag was repeatedly set on files
+inside `.venv`, and CPython's `site` module skips `.pth` files carrying that flag, so the
+editable install of `football_stats` intermittently vanished from `sys.path`. The two settings
+are harmless on Linux/CI and make the gate independent of that flag.
+
+## I-4: Commit trailer
+The implementer role file asks for a `Co-Authored-By: Claude Opus 5.5` trailer; the session's
+attribution rule names the model actually running, so commits end with
+`Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.

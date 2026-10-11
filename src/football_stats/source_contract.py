@@ -108,3 +108,42 @@ COLUMN_SPECS: tuple[ColumnSpec, ...] = (
 )
 
 EXPECTED_COLUMNS: tuple[str, ...] = tuple(spec.source_name for spec in COLUMN_SPECS)
+
+_KEY_DB_COLUMNS = ("league_code", "match_date", "kickoff_time")
+
+#: Columns of the ``matches`` staging frame/table, in order: the natural-key parts, the two
+#: team keys (resolved to ids in SQL), every other source value, then provenance.
+MATCH_STAGING_COLUMNS: tuple[str, ...] = (
+    *_KEY_DB_COLUMNS,
+    "home_team_key",
+    "away_team_key",
+    *(
+        spec.db_column
+        for spec in COLUMN_SPECS
+        if spec.parser is not Parser.TEAM and spec.db_column not in _KEY_DB_COLUMNS
+    ),
+    "source_sha256",
+    "source_row_number",
+)
+
+_SQL_TYPES = {
+    Parser.TEXT: "text",
+    Parser.LEAGUE: "text",
+    Parser.DATE: "date",
+    Parser.TIME: "time",
+    Parser.COUNT: "smallint",
+    Parser.DECIMAL: "double precision",
+    Parser.RESULT: "char(1)",
+}
+
+#: PostgreSQL type of each staging column.
+MATCH_STAGING_SQL_TYPES: dict[str, str] = {
+    "home_team_key": "text",
+    "away_team_key": "text",
+    "source_sha256": "char(64)",
+    "source_row_number": "integer",
+    **{s.db_column: _SQL_TYPES[s.parser] for s in COLUMN_SPECS if s.parser is not Parser.TEAM},
+}
+
+#: Columns that identify a match (the upsert conflict target, resolved to ids in SQL).
+MATCH_KEY_COLUMNS: tuple[str, ...] = ("league_code", "match_date", "home_team_key", "away_team_key")
