@@ -84,6 +84,15 @@ def run(settings: Settings, source_file: Path | None = None) -> RunReport:
         batch.teams.height,
     )
 
+    for reason, count in partition.counts_by_reason().items():
+        if count:
+            logger.info("excluded reason=%s count=%d", reason, count)
+    if logger.isEnabledFor(logging.DEBUG):
+        for number, reason, detail in partition.excluded.select(
+            "source_row_number", "reason", "detail"
+        ).iter_rows():
+            logger.debug("row=%d reason=%s detail=%s", number, reason, detail)
+
     meta = load.RunMeta(
         started_at=started_at,
         source_url=raw.source_url,

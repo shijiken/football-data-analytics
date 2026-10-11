@@ -113,6 +113,36 @@ def _upsert_matches_sql() -> sql.Composed:
     )
 
 
+def _persist_excluded(
+    cur: psycopg.Cursor, run_id: int, source_sha256: str, excluded: pl.DataFrame
+) -> None:
+    """Upsert excluded rows keyed by ``(source_sha256, source_row_number)`` (R11 step 7).
+
+    ``run_id`` stays the first run that recorded the row: it is never updated.
+    """
+    cur.execute(
+        "CREATE TEMP TABLE stg_excluded (source_row_number integer, reason text, "
+        "detail text, raw_record jsonb) ON COMMIT DROP"
+    )
+    with cur.copy(
+        "COPY stg_excluded (source_row_number, reason, detail, raw_record) FROM STDIN"
+    ) as copy:
+        for number, reason, detail, raw_record in excluded.select(
+            "source_row_number", "reason", "detail", "raw_record"
+        ).iter_rows():
+            copy.write_row((number, reason, detail, Jsonb(raw_record)))
+    cur.execute(
+        "INSERT INTO excluded_rows (run_id, source_sha256, source_row_number, reason, detail, "
+        "raw_record) SELECT %s, %s, source_row_number, reason, detail, raw_record "
+        "FROM stg_excluded ORDER BY source_row_number "
+        "ON CONFLICT ON CONSTRAINT excluded_rows_source_key DO UPDATE SET "
+        "reason = EXCLUDED.reason, detail = EXCLUDED.detail, raw_record = EXCLUDED.raw_record "
+        "WHERE (excluded_rows.reason, excluded_rows.detail, excluded_rows.raw_record) "
+        "IS DISTINCT FROM (EXCLUDED.reason, EXCLUDED.detail, EXCLUDED.raw_record)",
+        (run_id, source_sha256),
+    )
+
+
 def load_run(
     conn: psycopg.Connection,
     batch: CleanBatch,
@@ -125,7 +155,7 @@ def load_run(
         conn: Open connection (not in a transaction).
         batch: Leagues, teams and matches to upsert.
         excluded: Excluded rows to persist (``source_row_number``, ``reason``, ``detail``,
-            ``raw_record``).
+            ``raw_record`` as a dict of every source column).
         run: Run metadata for ``ingest_runs``.
 
     Returns:
@@ -186,6 +216,7 @@ def load_run(
             if row is None:
                 raise LoadError("ingest_runs insert returned no run_id")
             run_id = int(row[0])
+            _persist_excluded(cur, run_id, run.source_sha256, excluded)
     except psycopg.Error as exc:
         raise LoadError(f"Database load failed and was rolled back: {exc}") from exc
     return LoadCounts(run_id, inserted, updated, unchanged)
