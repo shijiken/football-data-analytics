@@ -1,0 +1,21 @@
+Fixture provenance
+==================
+
+matches_real_sample.csv
+  Built once from the commit-pinned dataset file (research.md R1) with:
+
+    curl -sSL https://raw.githubusercontent.com/xgabora/Club-Football-Match-Data/25882a58a736daf7ece3781940eac17ae1117a66/data/Matches.csv \
+      | awk 'NR==1 || (NR>=2 && NR<=11) || NR==64347 || NR==73508 || NR==112582 || NR==174503 || NR==192326 || NR==230559' \
+      > tests/fixtures/matches_real_sample.csv
+
+  Source file line numbers: 1 (header), 2-11 (first ten records), 64347 ("Ajax "),
+  73508 ("Colon Santa FE"), 112582 (missing result), 174503 ("King\u0092s Lynn"),
+  192326 ("Colon Santa Fe"), 230559 (the empty line).
+
+  Dataset: Gabor, A. (2025). Club Football Match Data.
+  https://github.com/xgabora/Club-Football-Match-Data
+  Licence: MIT. The rows are reproduced unchanged under that licence.
+
+All other files in this directory are synthetic: hand-designed rows that use the same 48-column
+header as the real file (matches_edge_cases.expected.json records the expected outcome of every
+row of matches_edge_cases.csv, keyed by 1-based source_row_number).

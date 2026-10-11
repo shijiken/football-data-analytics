@@ -1,0 +1,98 @@
+{
+  "1": {
+    "reason": "missing_field",
+    "detail": "Division, MatchDate, HomeTeam, AwayTeam"
+  },
+  "2": {
+    "reason": "missing_field",
+    "detail": "Division"
+  },
+  "3": {
+    "reason": "missing_field",
+    "detail": "MatchDate"
+  },
+  "4": {
+    "reason": "missing_field",
+    "detail": "HomeTeam"
+  },
+  "5": {
+    "reason": "missing_field",
+    "detail": "AwayTeam"
+  },
+  "6": {
+    "reason": "missing_field",
+    "detail": "HomeTeam"
+  },
+  "7": {
+    "reason": "invalid_date",
+    "detail": "2021-02-30"
+  },
+  "8": {
+    "reason": "invalid_date",
+    "detail": "03/12/2020"
+  },
+  "9": {
+    "reason": "missing_result",
+    "detail": "FTHome"
+  },
+  "10": {
+    "reason": "invalid_value",
+    "detail": "FTHome"
+  },
+  "11": {
+    "reason": "invalid_value",
+    "detail": "HomeShots"
+  },
+  "12": {
+    "reason": "invalid_value",
+    "detail": "HomeShots"
+  },
+  "13": {
+    "reason": "invalid_value",
+    "detail": "MatchTime"
+  },
+  "14": {
+    "reason": "invalid_value",
+    "detail": "FTResult"
+  },
+  "15": {
+    "reason": "invalid_value",
+    "detail": "OddHome"
+  },
+  "16": {
+    "reason": "invalid_value",
+    "detail": "Division"
+  },
+  "17": {
+    "reason": "same_team",
+    "detail": "ajax"
+  },
+  "18": "loaded",
+  "19": "loaded",
+  "20": {
+    "reason": "duplicate",
+    "detail": "duplicate of source row 18"
+  },
+  "21": {
+    "reason": "duplicate",
+    "detail": "duplicate of source row 19"
+  },
+  "22": "loaded",
+  "23": "loaded",
+  "24": "loaded",
+  "25": "loaded",
+  "26": "loaded",
+  "27": {
+    "reason": "missing_field",
+    "detail": "HomeTeam"
+  },
+  "28": {
+    "reason": "invalid_date",
+    "detail": "2021-13-01"
+  },
+  "29": {
+    "reason": "invalid_value",
+    "detail": "HomeShots"
+  },
+  "30": "loaded"
+}

@@ -7,6 +7,7 @@ import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -14,6 +15,9 @@ import psycopg
 import pytest
 from psycopg import sql
 from testcontainers.postgres import PostgresContainer
+
+from football_stats.config import Settings
+from tests.integration import helpers
 
 _counter = itertools.count(1)
 
@@ -107,3 +111,46 @@ def loopback_http_server() -> Iterator[LoopbackServer]:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+@pytest.fixture(scope="session")
+def template_db(admin_url: str) -> Iterator[str]:
+    """Create a migrated template database once per session and return its name."""
+    name = "football_template"
+    url = _create_database(admin_url, name)
+    helpers.upgrade(url)
+    with psycopg.connect(admin_url, autocommit=True) as conn:
+        conn.execute(sql.SQL("ALTER DATABASE {} IS_TEMPLATE true").format(sql.Identifier(name)))
+    yield name
+    with psycopg.connect(admin_url, autocommit=True) as conn:
+        conn.execute(sql.SQL("ALTER DATABASE {} IS_TEMPLATE false").format(sql.Identifier(name)))
+    _drop_database(admin_url, name)
+
+
+@pytest.fixture
+def db_url(admin_url: str, template_db: str) -> Iterator[str]:
+    """Create a migrated database cloned from the template for one test."""
+    name = f"test_{next(_counter)}"
+    url = _create_database(admin_url, name, template=template_db)
+    try:
+        yield url
+    finally:
+        _drop_database(admin_url, name)
+
+
+@pytest.fixture
+def db_conn(db_url: str) -> Iterator[psycopg.Connection]:
+    """Open a transactional (non-autocommit) connection to the per-test database."""
+    with psycopg.connect(db_url) as conn:
+        yield conn
+
+
+@pytest.fixture
+def settings(db_url: str, tmp_path: Path) -> Settings:
+    """Settings for pipeline tests: raw files go to ``tmp_path``, never the repository."""
+    return Settings(
+        database_url=db_url,
+        source_url="file:///nonexistent/override-in-test.csv",
+        raw_data_dir=tmp_path / "raw",
+        log_level="DEBUG",
+    )
