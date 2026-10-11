@@ -142,17 +142,29 @@ def add_team_keys(frame: pl.DataFrame) -> pl.DataFrame:
                 "away_team_display",
             )
         )
-    keys = [team_key(n) for n in names]
-    displays = [display_name(n) for n in names]
+    # Python treats e.g. U+001C..U+001F as whitespace while polars does not, so a name can be
+    # non-blank for polars yet normalize to "". Such names are blank: null key, display, name.
+    keys: list[str | None] = [team_key(n) or None for n in names]
+    displays: list[str | None] = [display_name(n) or None for n in names]
 
-    def mapped(column: str, values: list[str], alias: str) -> pl.Expr:
+    def mapped(column: str, values: list[str | None], alias: str) -> pl.Expr:
         return pl.col(column).replace_strict(names, values, default=None).alias(alias)
 
-    return frame.with_columns(
+    mapped_frame = frame.with_columns(
         mapped("home_team", keys, "home_team_key"),
         mapped("away_team", keys, "away_team_key"),
         mapped("home_team", displays, "home_team_display"),
         mapped("away_team", displays, "away_team_display"),
+    )
+    return mapped_frame.with_columns(
+        pl.when(pl.col("home_team_key").is_null())
+        .then(None)
+        .otherwise(pl.col("home_team"))
+        .alias("home_team"),
+        pl.when(pl.col("away_team_key").is_null())
+        .then(None)
+        .otherwise(pl.col("away_team"))
+        .alias("away_team"),
     )
 
 

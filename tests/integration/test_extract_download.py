@@ -6,11 +6,11 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from football_stats.extract import fetch_to_raw
 
 from football_stats import pipeline
 from football_stats.config import Settings
 from football_stats.errors import SourceUnavailableError
+from football_stats.extract import fetch_to_raw
 from tests.conftest import fixture_path
 from tests.integration import helpers
 from tests.integration.conftest import LoopbackServer
@@ -72,7 +72,22 @@ def test_unreachable_source_raises(tmp_path: Path, loopback_http_server: Loopbac
         fetch_to_raw(f"http://127.0.0.1:{_free_port()}/x.csv", tmp_path / "raw")
     with pytest.raises(SourceUnavailableError):
         fetch_to_raw(tmp_path / "does-not-exist.csv", tmp_path / "raw")
-    assert not list((tmp_path / "raw").glob("*")) if (tmp_path / "raw").exists() else True
+    assert not (tmp_path / "raw").exists() or not any((tmp_path / "raw").iterdir())
+
+
+def test_unparsable_content_length_is_source_unavailable(
+    tmp_path: Path, loopback_http_server: LoopbackServer
+) -> None:
+    loopback_http_server.routes["/x.csv"] = (200, {"Content-Length": "abc"}, b"a,b\n", None)
+    with pytest.raises(SourceUnavailableError):
+        fetch_to_raw(f"{loopback_http_server.base_url}/x.csv", tmp_path / "raw")
+
+
+def test_unwritable_raw_dir_is_source_unavailable(tmp_path: Path) -> None:
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("x", encoding="utf-8")
+    with pytest.raises(SourceUnavailableError):
+        fetch_to_raw(fixture_path(FIXTURE), blocker / "raw")
 
 
 def test_interrupted_download_leaves_no_file_and_db_unchanged(

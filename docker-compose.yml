@@ -29,7 +29,7 @@ services:
     build: .
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      SOURCE_URL: ${SOURCE_URL:-https://raw.githubusercontent.com/xgabora/Club-Football-Match-Data/25882a58a736daf7ece3781940eac17ae1117a66/data/Matches.csv}
+      SOURCE_URL: ${SOURCE_URL:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - rawdata:/app/data/raw

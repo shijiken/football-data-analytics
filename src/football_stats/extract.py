@@ -115,9 +115,9 @@ def fetch_to_raw(source: str | Path, raw_dir: Path) -> RawFile:
         url = source
     else:
         url = Path(source).resolve().as_uri()
-    raw_dir.mkdir(parents=True, exist_ok=True)
     partial = raw_dir / f".partial-{os.getpid()}"
     try:
+        raw_dir.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha256()
         size = 0
         with (
@@ -129,9 +129,10 @@ def fetch_to_raw(source: str | Path, raw_dir: Path) -> RawFile:
                 digest.update(chunk)
                 out.write(chunk)
                 size += len(chunk)
-        if expected is not None and int(expected) != size:
+        if expected is not None and not (expected.isascii() and expected.strip() == str(size)):
             raise SourceUnavailableError(
-                f"Short read from {url}: got {size} bytes, expected {expected}"
+                f"Short or unverifiable read from {url}: got {size} bytes, "
+                f"Content-Length {expected!r}"
             )
         sha = digest.hexdigest()
         target = raw_dir / f"matches-{sha}.csv"
@@ -146,9 +147,11 @@ def fetch_to_raw(source: str | Path, raw_dir: Path) -> RawFile:
         urllib.error.URLError,
         TimeoutError,
         http.client.IncompleteRead,
-        FileNotFoundError,
-        ConnectionError,
+        OSError,  # also covers FileNotFoundError, ConnectionError, disk full, permissions
     ) as exc:
         raise SourceUnavailableError(f"Cannot fetch {url}: {exc}") from exc
     finally:
-        partial.unlink(missing_ok=True)
+        try:
+            partial.unlink(missing_ok=True)
+        except OSError as exc:  # best-effort cleanup must not mask the original error
+            logger.debug("could not remove %s: %s", partial, exc)

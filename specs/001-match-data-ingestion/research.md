@@ -124,8 +124,9 @@ values cannot be mapped to columns reliably, and in a generated CSV it signals f
 bad download rather than one bad record; the measured source has 0 such rows; can be revisited in
 Phase 2 with the data contracts).
 
-`test_read_source_malformed_raises` is parametrized with a 47-field row (which polars alone would
-accept) and a 49-field row, so a regression in `check_structure` fails the gate.
+`test_malformed_source_raises` calls `check_structure` on a 47-field row (which polars alone would
+accept), a 49-field row and invalid UTF-8, so a regression in `check_structure` fails the gate;
+`test_read_source_malformed_raises` keeps one `read_source` case (49 fields) as defence in depth.
 
 The behaviour "an empty line is read as one all-null record" is pinned by a unit test
 (`test_read_source_counts_blank_line_as_record`), so a polars upgrade that changes it fails the

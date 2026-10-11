@@ -2,8 +2,8 @@ import json
 
 import polars as pl
 import pytest
-from football_stats.validate import Partition
 
+from football_stats.validate import Partition
 from tests.conftest import fixture_path
 from tests.stages import partition_file, partition_rows
 
@@ -38,6 +38,8 @@ def test_edge_case_fixture_outcomes_match_expected() -> None:
         ({"HomeTeam": None}, "HomeTeam"),
         ({"AwayTeam": None}, "AwayTeam"),
         ({"HomeTeam": "   "}, "HomeTeam"),
+        ({"HomeTeam": "\x1c"}, "HomeTeam"),
+        ({"AwayTeam": " \x1f\x1e "}, "AwayTeam"),
         ({"Division": None, "AwayTeam": " "}, "Division, AwayTeam"),
         ({"__blank__": None}, "Division, MatchDate, HomeTeam, AwayTeam"),
     ],

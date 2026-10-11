@@ -236,3 +236,33 @@ alike. The manual `quickstart.md` section 10 command still mounts `tests/fixture
 T053 (run quickstart against the real pinned dataset and record SC-001/SC-002 timings, machine
 and real counts) is not performed by the implementer. The README "Measured numbers" section holds
 clearly marked `TODO(T053)` placeholders, and the task stays unticked.
+
+# Decisions: Code Review Round 1 (reviews/code-review-1.md)
+
+### C1-1: Control-character-only team name aborted the whole run
+Finding: `str.split()` treats U+001C..U+001F as whitespace but polars `strip_chars` does not, so such a name passed `missing_field` and produced an empty `team_key`, failing the load (exit 7).
+Response: FIXED
+Reasoning: `add_team_keys` now maps any name whose key or display is empty to null, and nulls `home_team`/`away_team` for those rows, so the existing `missing_field` rule excludes them (`raw_record` keeps the original). Failing tests first: `test_missing_required_field_excluded` gained `"\x1c"` and `" \x1f\x1e "` cases.
+
+### C1-2: `matches_unchanged` derived by subtraction
+Finding: a staged match dropped by the INNER JOIN would be counted as unchanged.
+Response: FIXED
+Reasoning: `load_run` counts `stg_matches` joined to both teams before the upsert and raises `AccountingError` (exit 8, rollback) if it differs from `batch.matches.height`. This path cannot be reached through the pipeline, so it has no dedicated test; the existing atomicity and idempotency tests cover the unchanged path.
+
+### C1-3: `verify` held every source record in memory
+Finding: about 860 MB peak for the real file.
+Response: FIXED
+Reasoning: `verify` now counts records in a first pass and materializes only the chosen rows in a second; behaviour and the existing verify tests are unchanged.
+
+### C1-4: Spec artifacts out of date for I-1 and T046
+Response: FIXED
+Reasoning: plan.md (Principle I and FR-002 rows), research.md R4 and tasks.md T046 now describe `test_malformed_source_raises` / `test_read_source_malformed_raises` and the actual T046 assertion.
+
+### C1-5: `fetch_to_raw` failures escaped as exit 1
+Finding: a non-numeric `Content-Length` and `OSError` (disk full, permissions, unusable raw dir) were not mapped to `source_unavailable`.
+Response: FIXED
+Reasoning: the directory creation moved inside the guarded block, `OSError` is caught (superset of `FileNotFoundError`/`ConnectionError`), and a `Content-Length` that does not equal the byte count, including an unparsable one, is treated as a short read. Failing tests first: `test_unparsable_content_length_is_source_unavailable`, `test_unwritable_raw_dir_is_source_unavailable`.
+
+### C1-6: Readability nits
+Response: FIXED
+Reasoning: Compose uses `SOURCE_URL: ${SOURCE_URL:-}` (the code default is the single source of truth); the conditional assertion in `test_unreachable_source_raises` is rewritten; the migration's optional-column indentation is aligned (whitespace only; catalog snapshot tests unchanged).

@@ -40,12 +40,24 @@ class VerifyReport:
         )
 
 
-def _read_source(path: Path) -> list[dict[str, str]]:
-    """Read data records with the stdlib csv module; an empty line becomes ``{}``."""
+def _count_records(path: Path) -> int:
+    """Count data records (an empty line is a record) without keeping them in memory."""
+    with path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle)
+        next(reader)
+        return sum(1 for _ in reader)
+
+
+def _read_records(path: Path, wanted: set[int]) -> dict[int, dict[str, str]]:
+    """Materialize only the ``wanted`` 1-based data records (empty line -> ``{}``)."""
+    records: dict[int, dict[str, str]] = {}
     with path.open(encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle)
         header = next(reader)
-        return [dict(zip(header, fields, strict=True)) if fields else {} for fields in reader]
+        for number, fields in enumerate(reader, start=1):
+            if number in wanted:
+                records[number] = dict(zip(header, fields, strict=True)) if fields else {}
+    return records
 
 
 def _compare(number: int, source: dict[str, str], db: _DbRow | None) -> list[dict[str, object]]:
@@ -115,19 +127,20 @@ def run_verify(
 
     path = source_file if source_file is not None else settings.raw_data_dir / f"matches-{sha}.csv"
     try:
-        records = _read_source(path)
+        total = _count_records(path)
     except FileNotFoundError as exc:
         raise SourceUnavailableError(f"Raw source file not found: {path}") from exc
 
-    accepted = sorted(n for n in range(1, len(records) + 1) if n not in excluded)
+    accepted = sorted(n for n in range(1, total + 1) if n not in excluded)
     chosen = (
         accepted
         if sample <= 0 or sample >= len(accepted)
         else sorted(random.Random(seed).sample(accepted, sample))
     )
+    records = _read_records(path, set(chosen))
     differences: list[dict[str, object]] = []
     for number in chosen:
-        differences.extend(_compare(number, records[number - 1], db_rows.get(number)))
+        differences.extend(_compare(number, records[number], db_rows.get(number)))
     logger.info("verify checked=%d differences=%d", len(chosen), len(differences))
     if differences:
         raise VerificationFailedError(

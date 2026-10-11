@@ -12,7 +12,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from football_stats.clean import CleanBatch
-from football_stats.errors import ConcurrentRunError, LoadError
+from football_stats.errors import AccountingError, ConcurrentRunError, LoadError
 from football_stats.source_contract import (
     MATCH_KEY_COLUMNS,
     MATCH_STAGING_COLUMNS,
@@ -183,6 +183,16 @@ def load_run(
                 "ORDER BY team_key ON CONFLICT (team_key) DO UPDATE SET name = EXCLUDED.name "
                 "WHERE teams.name IS DISTINCT FROM EXCLUDED.name"
             )
+            joined = cur.execute(
+                "SELECT count(*) FROM stg_matches s "
+                "JOIN teams h ON h.team_key = s.home_team_key "
+                "JOIN teams a ON a.team_key = s.away_team_key"
+            ).fetchone()
+            if joined is None or joined[0] != batch.matches.height:
+                raise AccountingError(
+                    f"{batch.matches.height} staged matches but {joined and joined[0]} resolve "
+                    "to a league and two teams; refusing to load"
+                )
             cur.execute(_upsert_matches_sql())
             # `xmax = 0` identifies freshly inserted tuples: a widely used Postgres idiom that
             # relies on an implementation detail. It is guarded by
