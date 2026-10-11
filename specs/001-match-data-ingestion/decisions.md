@@ -266,3 +266,14 @@ Reasoning: the directory creation moved inside the guarded block, `OSError` is c
 ### C1-6: Readability nits
 Response: FIXED
 Reasoning: Compose uses `SOURCE_URL: ${SOURCE_URL:-}` (the code default is the single source of truth); the conditional assertion in `test_unreachable_source_raises` is rewritten; the migration's optional-column indentation is aligned (whitespace only; catalog snapshot tests unchanged).
+
+# Decisions: Code Review Round 2 (reviews/code-review-2.md)
+
+### C2-1: The `AccountingError` guard in `load_run` had no test
+Finding: the guard is reachable through `load_run` directly, so "no dedicated test" (C1-2) was wrong; the message also named a league although only `teams` is joined.
+Response: FIXED
+Reasoning: added `test_unresolvable_team_raises_accounting_error_and_rolls_back` (empty and preloaded database). It renames the key `derby` to an unknown `ghost` in the staged matches (removing the team from `batch.teams` would not trigger the guard on a preloaded database, where the team already exists), asserts `AccountingError` and an unchanged `snapshot`. The message now reads "resolve to two known teams".
+
+### C2-2: Empty `SOURCE_URL` was not pinned by a test
+Response: FIXED
+Reasoning: `test_config_defaults` now asserts that `SOURCE_URL` set to `""` and to `"   "` resolves to `PINNED_SOURCE_URL`, the path Compose uses.

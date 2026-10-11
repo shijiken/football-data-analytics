@@ -31,6 +31,10 @@ def test_config_defaults() -> None:
     )
     assert settings.raw_data_dir == Path("data/raw")
     assert settings.log_level == "INFO"
+    # Compose always passes SOURCE_URL, empty when unset: blank must also mean "default".
+    for blank in ("", "   "):
+        blank_env = {"DATABASE_URL": "postgresql://u:p@h:5432/d", "SOURCE_URL": blank}
+        assert load_settings(blank_env).source_url == PINNED_SOURCE_URL
 
 
 def test_config_missing_database_url_raises() -> None:

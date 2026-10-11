@@ -191,7 +191,7 @@ def load_run(
             if joined is None or joined[0] != batch.matches.height:
                 raise AccountingError(
                     f"{batch.matches.height} staged matches but {joined and joined[0]} resolve "
-                    "to a league and two teams; refusing to load"
+                    "to two known teams; refusing to load"
                 )
             cur.execute(_upsert_matches_sql())
             # `xmax = 0` identifies freshly inserted tuples: a widely used Postgres idiom that
