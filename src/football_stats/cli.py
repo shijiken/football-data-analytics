@@ -1,4 +1,4 @@
-"""Command-line entry point: ``football-stats ingest``."""
+"""Command-line entry point: ``football-stats ingest`` and ``football-stats verify``."""
 
 from __future__ import annotations
 
@@ -12,7 +12,8 @@ from pathlib import Path
 
 from football_stats import pipeline
 from football_stats.config import load_settings
-from football_stats.errors import FootballStatsError
+from football_stats.errors import FootballStatsError, VerificationFailedError
+from football_stats.verify import run_verify
 
 logger = logging.getLogger("football_stats")
 
@@ -29,6 +30,10 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="ingest this local file instead of SOURCE_URL",
     )
+    verify = sub.add_parser("verify", help="compare sampled source rows with the database")
+    verify.add_argument("--sample", type=int, default=20, help="rows to check; 0 = all")
+    verify.add_argument("--seed", type=int, default=42, help="sampling seed")
+    verify.add_argument("--source-file", type=Path, default=None, help="source to read")
     return parser
 
 
@@ -52,7 +57,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "ingest":
             _write_json(pipeline.run(settings, source_file=args.source_file).to_json())
             return 0
-        raise AssertionError(f"unhandled command {args.command}")  # pragma: no cover
+        _write_json(run_verify(settings, args.sample, args.seed, args.source_file).to_json())
+        return 0
+    except VerificationFailedError as exc:
+        logger.error("%s: %s", exc.error, exc)
+        document = _failure(exc.error, str(exc))
+        document.update(checked=exc.checked, differences=exc.differences)
+        _write_json(document)
+        return exc.exit_code
     except FootballStatsError as exc:
         logger.error("%s: %s", exc.error, exc)
         _write_json(_failure(exc.error, str(exc)))

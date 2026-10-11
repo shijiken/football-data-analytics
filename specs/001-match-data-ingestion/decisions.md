@@ -222,3 +222,17 @@ are harmless on Linux/CI and make the gate independent of that flag.
 The implementer role file asks for a `Co-Authored-By: Claude Opus 5.5` trailer; the session's
 attribution rule names the model actually running, so commits end with
 `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
+
+## I-5: Compose smoke test mounts a temporary copy of the fixture
+Deviation: T040 mounts `$PWD/tests/fixtures`; `scripts/smoke_compose.sh` copies
+`matches_valid.csv` to a `mktemp -d` directory and mounts that instead.
+Reasoning: on macOS, Docker Desktop needs a permission grant before it can read a bind mount
+under `~/Desktop` or `~/Documents`. During implementation the unattended run blocked on that
+(the container stayed in state `Created` and the daemon stopped starting containers until
+Docker Desktop was restarted). A temporary directory works for every checkout location and on CI
+alike. The manual `quickstart.md` section 10 command still mounts `tests/fixtures` and may prompt once.
+
+## I-6: Real-data tasks left for the orchestrator
+T053 (run quickstart against the real pinned dataset and record SC-001/SC-002 timings, machine
+and real counts) is not performed by the implementer. The README "Measured numbers" section holds
+clearly marked `TODO(T053)` placeholders, and the task stays unticked.
