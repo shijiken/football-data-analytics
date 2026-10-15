@@ -39,6 +39,8 @@ supersedes 001's for `ingest`:
 }
 ```
 
+(`duration_seconds` above is illustrative, not measured.)
+
 (Values shown: the planning profile of the real file re-run on a feature-001 database after the
 upgrade, research.md R16; real numbers are recorded by task T036.)
 
@@ -51,14 +53,20 @@ Invariants (tested):
   together;
 - `contract_version` equals `data_contract.CONTRACT_VERSION` and the stored `ingest_runs` row.
 
-Logs (stderr, INFO): one line `contract rule=<id> violations=<n>` per rule (zeros included) and one
-line `converge matches_removed=<n> excluded_rows_removed=<n> teams_removed=<n> leagues_removed=<n>`.
+Logs (stderr, INFO, logger `football_stats.*`): one line `contract rule=<id> violations=<n>` per rule
+(zeros included) and one line
+`converge matches_removed=<n> excluded_rows_removed=<n> teams_removed=<n> leagues_removed=<n>`.
+Asserted with `caplog` by `test_run_report_and_record_contract_metadata` and
+`test_rerun_removes_now_violating_matches`. The generic invariants above are asserted for every
+fixture by `test_report_invariants_hold[*]` (unit) and for the CLI report by
+`test_cli_ingest_report_matches_schema`.
 
 ## Exit codes (addition)
 
 | Code | `error` | When | DB changed? |
 |---|---|---|---|
 | 9 | `contract_schema_error` | the frame given to the contract does not match its declared columns/dtypes, or a contract check failed to evaluate (programming error, research.md R14) | no (raised before the load) |
+| 10 | `clock_skew` | the database server's UTC date is earlier than the run date (the app and DB clocks disagree), detected right after taking the lock (research.md R8) | no (raised before any write) |
 
 ## Structure command
 

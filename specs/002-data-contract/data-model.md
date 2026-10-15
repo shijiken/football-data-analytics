@@ -59,7 +59,9 @@ always has all seven keys.
 ### 1.4 Downgrade (R18)
 
 `0003` drops the nine constraints. `0002` drops the four columns and restores the six-code reason
-CHECK (validated; fails, and is rolled back, while `contract_violation` rows exist).
+CHECK (validated; that revision fails and is rolled back while `contract_violation` rows exist).
+Because `env.py` commits each revision separately (`transaction_per_migration=True`), a downgrade
+from head to `0001` then stops at `0002_contract_run_metadata` (R18).
 
 ## 2. The data contract (FR-001, FR-002)
 
@@ -124,9 +126,16 @@ first. The 001 table (001 data-model §3) still holds; this feature adds:
 | `matches_contract_odds_min` | `odds_min` | `…[odd_below_one]`, `…[odd_zero_max_missing]`, `…[max_odd_below_one]` | same ids |
 | `matches_contract_max_odds_ge_avg` | `max_odds_ge_avg` | `…[max_below_avg]`, `…[max_odd_below_one]` | same ids |
 | `matches_contract_date_in_range` | `date_in_range` (pipeline bound = run date ≤ DB bound, R8) | `…[date_before_2000]`, `…[date_after_run_date]` | same ids |
-| all nine (skip semantics) | inputs missing → skipped | `…[ht_result_missing_goals]`, `…[ht_partial]`, `…[sot_one_side_missing]`, `…[odds_all_missing]` | same ids (accepted) |
+| all nine (skip semantics) | inputs missing → skipped | `…[ht_result_missing_goals]`, `…[ht_result_missing_with_goals]`, `…[ht_partial]`, `…[sot_one_side_missing]`, `…[odds_all_missing]`, `…[avg_missing_max_present]` | same ids (accepted) |
+| `max_odds_ge_avg` per-outcome terms | draw term alone | `…[draw_only_max_below_avg]` | same id |
 | all nine (boundaries) | `<=`/`>=` inclusive | `…[ht_eq_ft]`, `…[sot_eq_shots]`, `…[odd_exactly_one]`, `…[date_2000_01_01]`, `…[date_run_date]` | same ids (accepted) |
 | name parity | rule ids == `matches_contract_*` names | `test_contract_rule_ids_stable` | `test_every_contract_rule_has_db_constraint` |
+| differential on fixtures | every row of three fixtures, per constraint | — | `test_db_constraints_agree_with_pipeline_on_fixture_rows[*]` |
+
+The integration parity tests evaluate **each constraint's expression separately**
+(`pg_get_expr(conbin, conrelid)` on a constraint-free `LIKE matches` temp table), so the full set of
+failing constraints is compared with the full set of violated rules, not just the first constraint
+PostgreSQL reports (R13).
 
 Case table: `tests/contract_cases.py` (plan.md "Test Fixtures"). `excluded_rows_reason_check` ↔
 `ExclusionReason`: `test_excluded_rows_reason_check` (extended) and
@@ -137,8 +146,10 @@ Case table: `tests/contract_cases.py` (plan.md "Test Fixtures"). `excluded_rows_
 All in the existing single transaction, under the advisory lock:
 
 1. `pg_try_advisory_xact_lock` (001).
+1a. **Clock check**: if `(now() AT TIME ZONE 'UTC')::date < RunMeta.run_date`, raise
+   `ClockSkewError` (exit 10) before any write (R8).
 2. Temp tables + COPY: `stg_matches`, `stg_teams` (001) **and** `stg_excluded` (moved here from
-   step 9 so the convergence delete can use it).
+   step 10 so the convergence delete can use it); then `ANALYZE stg_matches, stg_excluded` (R15).
 3. Leagues insert, teams upsert (001).
 4. Team-resolution accounting check (001).
 5. Matches upsert → inserted / updated / unchanged (001, unchanged SQL; R9 explains why it cannot

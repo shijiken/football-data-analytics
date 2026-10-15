@@ -52,8 +52,10 @@ Expected report: `contract_version` 1; `rows_read` 238859; `rows_loaded` 237473;
 1386; `excluded_by_reason`: `missing_field` 1, `missing_result` 4, `contract_violation` 1381, others
 0; `violations_by_rule`: `sot_le_shots_home` 7, `sot_le_shots_away` 13, `odds_min` 8,
 `max_odds_ge_avg` 1357, others 0; `matches_inserted` 0, `matches_updated` 0, `matches_unchanged`
-237473, `matches_removed` 1381, `excluded_rows_removed` 0. Then SC-001 on the whole table (the
-transaction is rolled back, so the constraints stay `NOT VALID`):
+237473, `matches_removed` 1381, `excluded_rows_removed` 0. Then SC-001 on the whole table. This is a **read-only proof**: the transaction is
+rolled back, so the constraints stay `NOT VALID`. Never run `VALIDATE CONSTRAINT` outside
+`BEGIN … ROLLBACK`; a committed validation is a schema change, and schema changes go through
+Alembic revisions only (research.md R8):
 
 ```bash
 docker compose exec -T db psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" <<'SQL'

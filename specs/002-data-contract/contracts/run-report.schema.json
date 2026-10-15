@@ -72,7 +72,7 @@
         "error": {
           "enum": ["unexpected_error", "configuration_error", "source_unavailable", "missing_columns",
                    "malformed_source", "concurrent_run", "database_error", "accounting_error",
-                   "contract_schema_error"]
+                   "contract_schema_error", "clock_skew"]
         },
         "message": {"type": "string"}
       }

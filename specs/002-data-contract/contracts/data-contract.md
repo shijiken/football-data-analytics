@@ -28,7 +28,7 @@ the last column.
 | 6 | `sot_le_shots_away` | Away shots on target do not exceed away shots | (`AwayShots`, `AwayTarget`) → `AwayTarget <= AwayShots` | `matches_contract_sot_le_shots_away` |
 | 7 | `odds_min` | Every pre-match decimal odd is at least 1.0 | six terms, one per column `OddHome`, `OddDraw`, `OddAway`, `MaxHome`, `MaxDraw`, `MaxAway` → value `>= 1.0` | `matches_contract_odds_min` |
 | 8 | `max_odds_ge_avg` | Each maximum odd is at least the corresponding average odd | (`OddHome`, `MaxHome`) → `MaxHome >= OddHome`; same for Draw, Away | `matches_contract_max_odds_ge_avg` |
-| 9 | `date_in_range` | Match date is between 2000-01-01 and the run date, inclusive | (`MatchDate`) → `2000-01-01 <= MatchDate <= run date` | `matches_contract_date_in_range` (upper bound: the database transaction's UTC date, always ≥ the run date) |
+| 9 | `date_in_range` | Match date is between 2000-01-01 and the run date, inclusive | (`MatchDate`) → `2000-01-01 <= MatchDate <= run date` | `matches_contract_date_in_range` (upper bound: the database transaction's UTC date; the loader refuses to start (exit 10) if that date is earlier than the run date, so the DB bound is never stricter) |
 
 Not covered by version 1 (spec Assumptions): Elo, form, corners, fouls, cards, over/under and
 handicap odds, cluster columns; statistical plausibility (e.g. 15–0).

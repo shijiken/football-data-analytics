@@ -71,6 +71,12 @@ and loses the declarative schema object that documents column dtypes and rules i
    set before import).
 6. A column dtype mismatch is reported in the same `failure_cases` with
    `schema_context="Column"`, `check="dtype('Int16')"`, `index=null`.
+7. A check whose expression raises (probe: a condition reading a column that is not in the frame,
+   `ColumnNotFoundError`) does **not** propagate: it becomes one failure case with
+   `schema_context="DataFrameSchema"`, `check=<name>`, `index=null`, and the exception text in
+   `failure_case`.
+8. Failure cases are complete: 50,000 failing rows give 50,000 failure cases with 50,000 distinct
+   indices (no cap or sampling).
 
 **Decision**:
 - `data_contract.build_schema(contract, run_date) -> pa.DataFrameSchema` builds a schema with
@@ -90,7 +96,14 @@ and loses the declarative schema object that documents column dtypes and rules i
   error, not bad data: raise `ContractSchemaError` (exit 9, R14). It is never turned into
   exclusions, because that would exclude every row for a bug.
 - The probed behaviours 1–2, 5 and 6 are pinned by
-  `tests/unit/test_pandera_backend.py::test_pandera_polars_backend_behaviour`.
+  `tests/unit/test_pandera_backend.py::test_pandera_polars_backend_behaviour`. Our own guarantees
+  that rest on them are tested on `find_violations` itself (plan review P1-4):
+  `test_find_violations_ignores_pandera_env_disable` (a subprocess, no network, started with
+  `PANDERA_VALIDATION_ENABLED=False` and `PANDERA_VALIDATION_DEPTH=SCHEMA_ONLY` set **before**
+  import, still reports a known violation; in-process tests cannot cover this because pandera reads
+  the variables at import), `test_find_violations_is_complete_for_many_failures` (fact 8 through our
+  mapping: 50,000 violating rows → 50,000 violation rows) and
+  `test_find_violations_raising_rule_raises_contract_schema_error` (fact 7 → `ContractSchemaError`).
 
 **Rationale**: pandera does the evaluation (it is not decorative): the schema object is the
 contract, `validate(lazy=True)` collects every failure of every rule in one pass, and the failure
@@ -203,14 +216,17 @@ and the `(source_sha256, source_row_number)` key).
 argument; they never read a clock. `pipeline.run(settings, source_file=None, *, contract=
 CURRENT_CONTRACT, started_at=None)` uses `started_at` (default `dt.datetime.now(dt.UTC)`, must be
 timezone-aware) for both `ingest_runs.started_at` and `run_date = started_at.astimezone(dt.UTC).date()`.
-Unit tests use the constant `RUN_DATE = dt.date(2026, 10, 15)` from `tests/stages.py`; integration
-tests that ingest a fixture with date-sensitive rows pass `started_at=dt.datetime(2026, 10, 15,
-12, 0, tzinfo=dt.UTC)`.
+`run_date` also travels to the loader in `RunMeta.run_date` for the clock check of R8. Unit tests
+use the constant `RUN_DATE = dt.date(2021, 6, 30)` from `tests/stages.py`; integration tests that
+ingest `matches_contract.csv` or test a date boundary pass `started_at=CONTRACT_STARTED_AT =
+dt.datetime(2021, 6, 30, 12, 0, tzinfo=dt.UTC)`. Both lie well in the past, so no test depends on
+the real clock of the host or of the database container (plan review P1-2).
 
 **Rationale**: Spec: "run date is the date the run starts, in UTC". Injecting it makes the only
 time-dependent rule deterministic in tests (planner rule), and using the same instant for the run
-record keeps the report honest. The fixed test date lies in the past, so the database's own
-`now()`-based bound (R8) can never be stricter than the pipeline's in tests or production.
+record keeps the report honest. The fixed test dates lie years in the past, so the database's own
+`now()`-based bound (R8) is never stricter than the pipeline's in tests, even on a Docker VM whose
+clock has drifted. In production the two clocks can differ; R8 adds an explicit check for that.
 
 **Alternatives rejected**: `date.today()` inside the rule (untestable, local time zone);
 a `RUN_DATE` environment variable (configuration for a test concern; production must not be able
@@ -291,15 +307,25 @@ history).
 **Decision**: Migration `0003_contract_constraints` (after `0002_contract_run_metadata`, see R18) adds nine constraints to `matches`, one per rule,
 named `matches_contract_<rule_id>`, with the SQL of R3, all `NOT VALID`. They are never validated by
 the migration or the application. A fresh database gets the same `NOT VALID` constraints (on an empty
-table that is equivalent), so the catalog is identical however the database was reached. The README
-documents the optional manual `ALTER TABLE matches VALIDATE CONSTRAINT matches_contract_<id>` once
-all sources are converged, and quickstart uses it inside a rolled-back transaction as a whole-table
-SC-001 check.
+table that is equivalent), so the catalog is identical however the database was reached. Nobody
+validates them by hand: a committed `VALIDATE CONSTRAINT` changes the catalog (`convalidated`, the
+`NOT VALID` suffix), which is a schema change outside Alembic (constitution, Technical Constraints) and
+would make that database differ from `alembic upgrade head`. If validation is wanted later (e.g. once
+every source file has been converged), it ships as a new Alembic revision. The only `VALIDATE` in
+this feature is a **read-only proof**: quickstart §2 and the SC-001 tests run it inside
+`BEGIN … ROLLBACK`, so the catalog is unchanged afterwards (plan review P1-1).
 
 `date_in_range` in SQL uses the transaction's UTC date. The pipeline's `run_date` is taken before
-the load transaction starts, so the database bound is always ≥ the pipeline bound: the database can
-never reject a row the pipeline accepted (parity direction that matters). A row valid when
-inserted stays valid forever, because the bound only moves forward; this is why a `now()`-based
+the load transaction starts, so **when the application and the database share one clock** the
+database bound is ≥ the pipeline bound and the database can never reject a row the pipeline
+accepted (the parity direction that matters). The two clocks are not guaranteed to agree (a Docker
+Desktop VM drifts after sleep; a managed database is another host; `pipeline.run(started_at=...)`
+accepts any instant). Therefore `load_run`, right after taking the advisory lock and **before any
+write**, runs `SELECT (now() AT TIME ZONE 'UTC')::date` and, if that date is earlier than
+`RunMeta.run_date`, raises `ClockSkewError` (exit 10, `clock_skew`, message naming both dates)
+instead of letting a `matches_contract_date_in_range` CheckViolation surface as an anonymous
+`LoadError` halfway through the load. Tested by `test_db_clock_behind_run_date_fails_before_writes`.
+A row valid when inserted stays valid forever, because the bound only moves forward; this is why a `now()`-based
 CHECK is safe for dump/restore here, despite PostgreSQL's general advice that CHECK expressions be
 immutable.
 
@@ -417,9 +443,10 @@ changes.
 `DELETE FROM teams t WHERE NOT EXISTS (SELECT 1 FROM matches WHERE home_team_id = t.team_id) AND
 NOT EXISTS (SELECT 1 FROM matches WHERE away_team_id = t.team_id)` and
 `DELETE FROM leagues l WHERE NOT EXISTS (SELECT 1 FROM matches WHERE league_code =
-l.league_code)`. Counts are logged (`teams_removed`, `leagues_removed`), not stored. Both deletes
-use existing indexes (`matches_home_team_id_idx`, `matches_away_team_id_idx`, and the natural-key
-index led by `league_code`).
+l.league_code)`. Counts are logged (`teams_removed`, `leagues_removed`), not stored. The two orphan
+deletes can use existing indexes (`matches_home_team_id_idx`, `matches_away_team_id_idx`, and the
+natural-key index led by `league_code`); the stale-match delete of R10 cannot (no index on
+`source_sha256`) and is a sequential scan of `matches`, see R15.
 
 **Rationale**: The spec lets the plan choose, provided re-run and fresh build agree. Keeping orphans
 would make an upgraded database differ from a fresh build (extra team/league rows) the moment a
@@ -470,10 +497,17 @@ instruction and SC-004 "0 differences"); comparing with ids (impossible by const
   from the head template is loaded once; `content_snapshot`s must be equal.
 - **Shared parity cases**: `tests/contract_cases.py` holds one table of cases (`case_id`, source
   value overrides on a complete valid row, expected violated rule ids, with `{run_date}` /
-  `{run_date+1}` placeholders). The unit test runs each case through `validate.partition`; the
-  integration test inserts the same parsed row directly into `matches` and asserts the database
-  rejects it iff the pipeline does, with `diag.constraint_name` ∈ `matches_contract_<expected
-  ids>`. The integration test uses the database's UTC date as the run date.
+  `{run_date+1}` placeholders). The unit test runs each case through `validate.partition`. The
+  integration test compares **every constraint separately** (plan review P1-3), because PostgreSQL
+  reports only the first failing CHECK. It copies the parsed row into a temp table
+  `CREATE TEMP TABLE probe (LIKE matches)`, which copies no CHECK constraints. For each
+  `matches_contract_*` constraint it reads the expression with `pg_get_expr(conbin, conrelid)` and
+  evaluates `SELECT (<expr>) IS NOT FALSE FROM probe`. It then asserts that the set of failing
+  constraint names equals `{matches_contract_<r> for r in case.violated}`. It also asserts that a
+  real INSERT into `matches` is accepted iff that set is empty. The integration test uses the
+  database's UTC date as the run date. The same per-constraint comparison also runs over every row
+  of `matches_contract.csv`, `matches_edge_cases.csv` and `matches_real_sample.csv` (parsed with
+  `PRE_CONTRACT`), against `find_violations` with `CURRENT_CONTRACT`, as a cheap differential test.
 - **Name parity**: the set of contract rule ids equals the set of `matches_contract_*` constraint
   names in the catalog.
 
@@ -502,6 +536,10 @@ a bug, not bad data.
 **Alternatives rejected**: exit 1 `unexpected_error` (loses the distinction); converting such
 failures into exclusions (one parser regression would exclude every row and "succeed").
 
+**Also**: `errors.ClockSkewError(FootballStatsError)`, `exit_code = 10`, `error = "clock_skew"`, raised by
+`load_run` before any write when the database's UTC date is earlier than the run date (R8). It is a
+separate code because the remedy (fix a clock) differs from a database failure (exit 7).
+
 ## R15. Performance (SC-005)
 
 **Facts (measured, Apple M3, 2026-10-15)**: read + parse + partition of the real file (no
@@ -511,7 +549,13 @@ contract): 1.5 s. The nine rule expressions over 238,854 rows: 0.002 s as raw po
 
 **Decision**: No sampling, no chunking: one vectorized validation over the candidate frame, with
 only `source_row_number` and the 17 rule input columns selected before calling pandera (keeps the
-JSON `failure_case` payloads small). Convergence deletes are set-based anti-joins. SC-005 is
+JSON `failure_case` payloads small). Convergence deletes are set-based anti-joins: the stale-match
+delete scans all of `matches` (about 238k rows, no index on `source_sha256`), and the stale-exclusion
+delete scans `excluded_rows` for this file. Both are acceptable at this scale, and no index is added for
+them (YAGNI; the measured timing in T036 decides). The temp tables are filled by COPY and have no
+statistics, so `load_run` runs `ANALYZE stg_matches, stg_excluded` after the COPY. Without that the
+planner would estimate the anti-joins from default row counts and could choose a nested loop
+(plan review P1-9). SC-005 is
 measured manually (task T036, quickstart §3), never asserted in tests (001 R25: wall-clock
 assertions are flaky).
 
@@ -572,8 +616,12 @@ coverage that `test_duplicate_detail_points_to_kept_row` relies on).
 `excluded_rows_reason_check`) and `0003_contract_constraints` (the nine `NOT VALID` constraints of
 R8). `0003.downgrade()` drops the nine constraints. `0002.downgrade()` drops the four columns and
 restores the six-code reason CHECK **validated**; if `contract_violation` rows exist the restore
-fails with a check violation and Alembic's transactional DDL rolls the downgrade back, so the
-operator must decide what to do with those rows.
+fails with a check violation and that revision's transaction is rolled back. Note that
+`migrations/env.py` uses `transaction_per_migration=True`: a `downgrade 0001_initial_schema` from
+head first **commits** `0003`'s downgrade (constraints dropped) and then refuses `0002`'s, so the
+database stops at `0002_contract_run_metadata`, whose schema matches its `alembic_version` row. No
+exclusion record is lost; the operator must decide what to do with those rows before downgrading
+further. Tested by `test_downgrade_refused_with_contract_violation_rows` (plan review P1-7).
 
 **Rationale**: User Story 1 (pipeline contract, P1) needs only `0002`; User Story 2 (database
 enforcement, P2) adds `0003`. Separate revisions let each story be delivered and tested on its own
