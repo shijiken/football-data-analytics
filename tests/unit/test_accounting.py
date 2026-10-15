@@ -86,3 +86,23 @@ def test_report_invariants_hold(name: str) -> None:
     assert (counts["contract_violation"] == 0) == (violations == 0)
     assert sum(counts.values()) == part.excluded.height
     assert part.accepted.height + part.excluded.height == part.rows_read
+
+
+def test_partition_rejects_violations_disagreeing_with_exclusions() -> None:
+    accepted = pl.DataFrame({"source_row_number": []}, schema={"source_row_number": pl.UInt32})
+    excluded = pl.DataFrame(
+        {
+            "source_row_number": [1],
+            "reason": ["contract_violation"],
+            "detail": ["odds_min"],
+            "raw_record": [{}],
+        }
+    )
+    none = pl.DataFrame(schema={"source_row_number": pl.UInt32, "rule_id": pl.String})
+    with pytest.raises(AccountingError):
+        Partition(accepted, excluded, 1, none, CURRENT_CONTRACT.rule_ids)
+    unknown = pl.DataFrame({"source_row_number": [1], "rule_id": ["no_such_rule"]}).cast(
+        {"source_row_number": pl.UInt32}
+    )
+    with pytest.raises(AccountingError):
+        Partition(accepted, excluded, 1, unknown, CURRENT_CONTRACT.rule_ids)

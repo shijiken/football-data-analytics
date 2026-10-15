@@ -29,6 +29,9 @@ structure() {
     -c '\dt' -c 'SELECT version_num FROM alembic_version'
 }
 
+echo "==> build the image (never test a stale one)"
+"${COMPOSE[@]}" --profile ingest build
+
 echo "==> db up"
 "${COMPOSE[@]}" up -d --wait db
 

@@ -225,6 +225,11 @@ def find_violations(frame: pl.DataFrame, contract: DataContract, run_date: dt.da
         return _empty_violations()
     schema = build_schema(contract, run_date)
     inputs = ["source_row_number", *schema.columns]
+    missing = [name for name in inputs if name not in frame.columns]
+    if missing:
+        raise ContractSchemaError(
+            f"frame lacks columns required by the contract: {', '.join(missing)}"
+        )
     subset = frame.select(inputs)
     rule_position = {rule_id: i for i, rule_id in enumerate(contract.rule_ids)}
     # Forced context: PANDERA_VALIDATION_ENABLED=False must not silently disable the contract.

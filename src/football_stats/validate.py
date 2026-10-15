@@ -71,6 +71,19 @@ class Partition:
                 f"rows_read={self.rows_read} but accepted+excluded={total}; "
                 "refusing to load with unaccounted rows"
             )
+        unknown = set(self.violations["rule_id"]) - set(self.rule_ids)
+        if unknown:
+            raise AccountingError(f"violations name unknown rules: {sorted(unknown)}")
+        excluded_rows = set(
+            self.excluded.filter(pl.col("reason") == ExclusionReason.CONTRACT_VIOLATION.value)[
+                "source_row_number"
+            ]
+        )
+        if excluded_rows != set(self.violations["source_row_number"]):
+            raise AccountingError(
+                "contract_violation exclusions and violations disagree; "
+                "refusing to report wrong per-rule counts"
+            )
 
     def counts_by_reason(self) -> dict[str, int]:
         """Return the exclusion count for every reason (zeros included)."""

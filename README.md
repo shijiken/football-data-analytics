@@ -63,9 +63,15 @@ behind a Compose profile so it never re-downloads 45 MB by accident. The command
 report on stdout (logs go to stderr):
 
 ```json
-{"status": "succeeded", "run_id": 1, "rows_read": 238859, "rows_loaded": 238854,
- "rows_excluded": 5, "excluded_by_reason": {"missing_field": 1, "missing_result": 4, "...": 0}, "...": "..."}
+{"status": "succeeded", "run_id": 1, "contract_version": 1, "rows_read": 238859,
+ "rows_loaded": 237473, "rows_excluded": 1386,
+ "excluded_by_reason": {"missing_field": 1, "missing_result": 4, "contract_violation": 1381, "...": 0},
+ "violations_by_rule": {"max_odds_ge_avg": 1357, "...": 0}, "matches_inserted": 237473, "...": "..."}
 ```
+
+After pulling a new version, rebuild first, otherwise an old image runs against the new schema:
+`docker compose --profile ingest build` (or `docker compose run --rm --build ingest`). `migrate`
+and `ingest` share one image tag (`football-stats:local`), so they cannot diverge.
 
 Other useful commands:
 
@@ -76,7 +82,9 @@ docker compose down -v                                                        # 
 ```
 
 Exit codes, environment variables and report schemas:
-[`contracts/cli.md`](specs/001-match-data-ingestion/contracts/cli.md). The manual acceptance run
+[`contracts/cli.md`](specs/001-match-data-ingestion/contracts/cli.md), with the data-contract
+additions (new report fields, exit codes 9 and 10) in
+[`specs/002-data-contract/contracts/cli.md`](specs/002-data-contract/contracts/cli.md). The manual acceptance run
 is [`quickstart.md`](specs/001-match-data-ingestion/quickstart.md).
 
 ## Quality gate

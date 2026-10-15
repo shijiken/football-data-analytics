@@ -256,3 +256,13 @@ def test_find_violations_ignores_pandera_env_disable() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ft_result_consistent"
+
+
+def test_find_violations_missing_column_raises_contract_schema_error() -> None:
+    frame = parse_rows([_row("valid_full")]).drop("ft_home_goals")
+    with pytest.raises(ContractSchemaError, match="ft_home_goals"):
+        find_violations(frame, CURRENT_CONTRACT, RUN_DATE)
+    with pytest.raises(ContractSchemaError, match="source_row_number"):
+        find_violations(
+            parse_rows([_row("valid_full")]).drop("source_row_number"), CURRENT_CONTRACT, RUN_DATE
+        )

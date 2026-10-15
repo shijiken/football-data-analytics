@@ -380,3 +380,33 @@ the old image. The first T037 run therefore passed against the stale 001 image (
 build` and ran it again: the output shows the migrations `0001 -> 0002 -> 0003`,
 `alembic_version = 0003_contract_constraints` (identical after the second migrate) and the fixture
 ingest succeeded. CI starts from a clean runner, where the image is always built.
+
+## Code review round 1 (reviews/code-review-1.md)
+
+### C1-1: A missing contract input column escaped as a raw polars error
+Finding: `frame.select(inputs)` raised `ColumnNotFoundError` (exit 1) instead of exit 9.
+Response: FIXED
+Reasoning: `find_violations` now lists declared inputs (and `source_row_number`) absent from the
+frame and raises `ContractSchemaError` naming them, before the `select`. New test
+`test_find_violations_missing_column_raises_contract_schema_error` failed first.
+
+### C1-2: `Partition` did not cross-check `violations` against `excluded`
+Finding: with the I-4 defaults, `contract_violation` exclusions could exist without matching violations.
+Response: FIXED
+Reasoning: `__post_init__` now raises `AccountingError` if a violation names a rule outside `rule_ids`,
+or if the row numbers of `contract_violation` exclusions differ from the distinct row numbers in
+`violations`. Feature 001's direct construction (no contract rows, empty frame) still works. New test
+`test_partition_rejects_violations_disagreeing_with_exclusions` failed first.
+
+### C1-3: The smoke test could pass on a stale image
+Finding: `smoke_compose.sh` never built, and `migrate` and `ingest` were separate images.
+Response: FIXED (both options)
+Reasoning: `migrate` and `ingest` now share `image: football-stats:local` with `build: .`, so one
+build serves both. `smoke_compose.sh` builds (`--profile ingest build`) before starting, which makes
+the README claim true. Re-ran the script: exit 0, migrations to `0003_contract_constraints`.
+
+### C1-4: README "Run it" was out of date
+Finding: old sample report, no link to the 002 CLI contract, no rebuild note.
+Response: FIXED
+Reasoning: sample report now shows contract version 1 numbers and the new fields; the 002
+`contracts/cli.md` is linked (exit codes 9 and 10); a rebuild-after-pull note was added.
