@@ -8,6 +8,7 @@ dependencies = [
     "psycopg[binary]>=3.2,<3.3",
     "alembic>=1.16,<1.17",
     "sqlalchemy>=2.0,<2.1",
+    "pandera[polars]>=0.34.1,<0.35",
 ]
 
 [project.scripts]
