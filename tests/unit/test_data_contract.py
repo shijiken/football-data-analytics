@@ -9,6 +9,10 @@ from pathlib import Path
 import pandera.polars as pa
 import polars as pl
 import pytest
+from pandera.config import config_context
+from pandera.engines import polars_engine
+
+from football_stats import clean
 from football_stats.data_contract import (
     CONTRACT_VERSION,
     CURRENT_CONTRACT,
@@ -19,10 +23,6 @@ from football_stats.data_contract import (
     build_schema,
     find_violations,
 )
-from pandera.config import config_context
-from pandera.engines import polars_engine
-
-from football_stats import clean
 from football_stats.errors import ContractSchemaError
 from football_stats.source_contract import COLUMN_SPECS, EXPECTED_COLUMNS, ColumnKind, Parser
 from tests.conftest import FIXTURES_DIR
