@@ -4,6 +4,7 @@ import csv
 import datetime as dt
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 import psycopg
@@ -14,7 +15,8 @@ from football_stats.config import Settings
 from football_stats.data_contract import CONTRACT_VERSION, CURRENT_CONTRACT
 from tests.conftest import fixture_path
 from tests.contract_cases import FULL_ROW
-from tests.stages import CONTRACT_STARTED_AT
+from tests.integration import helpers
+from tests.stages import CONTRACT_STARTED_AT, RUN_DATE
 
 #: Per-rule counts of ``matches_contract.csv`` (plan.md "Derived expectations").
 CONTRACT_FIXTURE_BY_RULE = {
@@ -115,3 +117,41 @@ def test_date_in_range_boundary_uses_run_start_date(
     assert db_conn.execute(
         "SELECT source_row_number, reason, detail FROM excluded_rows"
     ).fetchall() == [(2, "contract_violation", "date_in_range")]
+
+
+def _validate_all_in_rolled_back_transaction(db_url: str) -> None:
+    """Prove every loaded match satisfies every rule, leaving the catalog untouched (R8)."""
+    with psycopg.connect(db_url) as conn:
+        for rule_id in CURRENT_CONTRACT.rule_ids:
+            conn.execute(
+                f"ALTER TABLE matches VALIDATE CONSTRAINT matches_contract_{rule_id}".encode()
+            )
+        conn.rollback()
+        flags = conn.execute(
+            "SELECT convalidated FROM pg_constraint WHERE conrelid = 'matches'::regclass "
+            "AND conname LIKE 'matches_contract_%'"
+        ).fetchall()
+    assert flags == [(False,)] * len(CURRENT_CONTRACT.rule_ids)
+
+
+def test_no_loaded_match_violates_contract(settings: Settings, db_url: str) -> None:
+    for name in ("matches_contract.csv", "matches_real_sample.csv"):
+        pipeline.run(settings, source_file=fixture_path(name), started_at=CONTRACT_STARTED_AT)
+    _validate_all_in_rolled_back_transaction(db_url)
+
+
+def test_upsert_rewrites_existing_violating_match(
+    empty_db_url: str, make_settings: Callable[[str], Settings]
+) -> None:
+    source = fixture_path("matches_contract.csv")
+    helpers.seed_pre_contract(empty_db_url, source, RUN_DATE)
+    helpers.upgrade(empty_db_url)
+    pipeline.run(make_settings(empty_db_url), source_file=source, started_at=CONTRACT_STARTED_AT)
+    with psycopg.connect(empty_db_url) as conn:
+        row = conn.execute(
+            "SELECT m.ft_result, m.source_row_number FROM matches m "
+            "JOIN teams h ON h.team_id = m.home_team_id JOIN teams a ON a.team_id = m.away_team_id "
+            "WHERE m.league_code = 'E0' AND m.match_date = '2020-11-01' "
+            "AND h.team_key = 'leeds' AND a.team_key = 'wolves'"
+        ).fetchone()
+    assert row == ("H", 18)

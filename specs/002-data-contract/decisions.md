@@ -271,3 +271,23 @@ instead of being required.
 Reasoning: feature 001's `test_partition_rejects_inconsistent_counts` builds
 `Partition(accepted=..., excluded=..., rows_read=...)` directly, and the instructions forbid
 editing a feature-001 test expectation. `validate.partition` always passes both fields.
+
+### I-5: `test_verify_cli_report_matches_schema` tampers with a different row
+Deviation: the test bumps `ft_away_goals` of source row 9 (Everton 4-0 Derby) instead of row 2
+(Liverpool 0-0 Everton). The assertion is the same shape: exactly one difference on
+`ft_away_goals`, source `"0"`, database `"1"`; only the row number in the expected difference
+changed from 2 to 9.
+Reasoning: once `0003_contract_constraints` exists, bumping the away goals of a 0-0 draw makes
+the stored row inconsistent with `ft_result`, so the database (correctly) refuses the UPDATE. Row 9
+stays consistent after the bump (4-1, `H`, half time 1-0), so the test still creates a real
+database/source difference. Nothing was weakened.
+
+### I-2: Fixture-wide parity probe rows use literal team ids
+Deviation: `test_db_constraints_agree_with_pipeline_on_fixture_rows` (and, for uniformity, the
+per-case parity test and the update test) insert staged rows with literal `home_team_id = 1` and
+`away_team_id = 2` instead of resolving team keys to ids.
+Reasoning: plan-review round 3, minor finding 2. No contract expression reads team ids, and
+`CREATE TEMP TABLE probe (LIKE matches INCLUDING DEFAULTS INCLUDING IDENTITY)` copies no foreign
+key and no `home <> away` CHECK. Upserting every fixture team first would add code that the test
+does not need. The per-case test still seeds teams 1 and 2 because it also does a real INSERT
+into `matches`.

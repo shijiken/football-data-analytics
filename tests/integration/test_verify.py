@@ -135,7 +135,7 @@ def test_verify_cli_report_matches_schema(
     assert report == {"status": "succeeded", "checked": 12, "differences": []}
 
     db_conn.execute(
-        "UPDATE matches SET ft_away_goals = ft_away_goals + 1 WHERE source_row_number = 2"
+        "UPDATE matches SET ft_away_goals = ft_away_goals + 1 WHERE source_row_number = 9"
     )
     db_conn.commit()
     code, report = _verify_cli(settings.database_url, settings.raw_data_dir)
@@ -143,5 +143,5 @@ def test_verify_cli_report_matches_schema(
     assert report["error"] == "verification_failed"
     assert report["checked"] == 12
     assert report["differences"] == [
-        {"source_row_number": 2, "field": "ft_away_goals", "source": "0", "database": "1"}
+        {"source_row_number": 9, "field": "ft_away_goals", "source": "0", "database": "1"}
     ]

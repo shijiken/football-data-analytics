@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import datetime as dt
+import hashlib
 from pathlib import Path
 
 import psycopg
 from alembic import command
 from alembic.config import Config
+from psycopg.types.json import Jsonb
+
+from football_stats import clean, extract, validate
+from football_stats.data_contract import PRE_CONTRACT
+from football_stats.source_contract import MATCH_KEY_COLUMNS, MATCH_STAGING_COLUMNS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -116,3 +123,76 @@ def content_snapshot(conn: psycopg.Connection) -> dict[str, list[object]]:
         rows = conn.execute(query.encode()).fetchall()
         result[table] = [row[0] if len(row) == 1 else tuple(row) for row in rows]
     return result
+
+
+_NON_KEY_COLUMNS = tuple(c for c in MATCH_STAGING_COLUMNS if c not in MATCH_KEY_COLUMNS)
+_MATCH_INSERT_COLUMNS = (
+    "league_code",
+    "match_date",
+    "home_team_id",
+    "away_team_id",
+    *_NON_KEY_COLUMNS,
+)
+
+
+def seed_pre_contract(database_url: str, source: Path, run_date: dt.date) -> str:
+    """Create the database state feature 001 would have loaded from ``source`` (research.md R13).
+
+    Migrates to ``0001_initial_schema`` and writes leagues, teams, matches, one 0001-shaped
+    ``ingest_runs`` row and the excluded rows with plain SQL in one transaction. The pure stages
+    run with ``PRE_CONTRACT``, so rows that violate the data contract are loaded as 001 did.
+
+    Returns:
+        The SHA-256 of ``source`` (the provenance stamped on the rows).
+    """
+    upgrade(database_url, "0001_initial_schema")
+    parsed = clean.add_team_keys(clean.parse_frame(extract.read_source(source)))
+    part = validate.partition(parsed, contract=PRE_CONTRACT, run_date=run_date)
+    sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    batch = clean.build_batch(part.accepted, sha)
+    by_reason = {k: v for k, v in part.counts_by_reason().items() if k != "contract_violation"}
+    insert_match = (
+        "INSERT INTO matches ("
+        + ", ".join(_MATCH_INSERT_COLUMNS)
+        + ") VALUES (%s, %s, (SELECT team_id FROM teams WHERE team_key = %s), "
+        "(SELECT team_id FROM teams WHERE team_key = %s)" + ", %s" * len(_NON_KEY_COLUMNS) + ")"
+    )
+    with psycopg.connect(database_url) as conn, conn.transaction():
+        for code in sorted(batch.leagues["league_code"]):
+            conn.execute("INSERT INTO leagues (league_code) VALUES (%s)", (code,))
+        for key, name in batch.teams.sort("team_key").iter_rows():
+            conn.execute("INSERT INTO teams (team_key, name) VALUES (%s, %s)", (key, name))
+        for row in batch.matches.sort("source_row_number").iter_rows(named=True):
+            values = [
+                row["league_code"],
+                row["match_date"],
+                row["home_team_key"],
+                row["away_team_key"],
+                *(row[c] for c in _NON_KEY_COLUMNS),
+            ]
+            conn.execute(insert_match.encode(), values)
+        run = conn.execute(
+            "INSERT INTO ingest_runs (started_at, finished_at, source_url, source_sha256, "
+            "source_bytes, raw_path, rows_read, rows_loaded, rows_excluded, excluded_by_reason, "
+            "matches_inserted, matches_updated, matches_unchanged) "
+            "VALUES (now(), now(), %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, 0) RETURNING run_id",
+            (
+                source.resolve().as_uri(),
+                sha,
+                source.stat().st_size,
+                str(source),
+                part.rows_read,
+                batch.matches.height,
+                part.excluded.height,
+                Jsonb(by_reason),
+                batch.matches.height,
+            ),
+        ).fetchone()
+        assert run is not None
+        for number, reason, detail, raw_record in part.excluded.iter_rows():
+            conn.execute(
+                "INSERT INTO excluded_rows (run_id, source_sha256, source_row_number, reason, "
+                "detail, raw_record) VALUES (%s, %s, %s, %s, %s, %s)",
+                (run[0], sha, number, reason, detail, Jsonb(raw_record)),
+            )
+    return sha
