@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "football-stats/002-data-contract/run-report.schema.json",
+  "title": "football-stats ingest report (stdout), contract version 1; also the generic failure shape of verify. Supersedes specs/001-match-data-ingestion/contracts/run-report.schema.json.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status", "run_id", "source_url", "source_sha256", "raw_path", "contract_version",
+        "rows_read", "rows_loaded", "rows_excluded", "excluded_by_reason", "violations_by_rule",
+        "matches_inserted", "matches_updated", "matches_unchanged", "matches_removed",
+        "excluded_rows_removed", "duration_seconds"
+      ],
+      "properties": {
+        "status": {"const": "succeeded"},
+        "run_id": {"type": "integer", "minimum": 1},
+        "source_url": {"type": "string"},
+        "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "raw_path": {"type": "string"},
+        "contract_version": {"type": "integer", "minimum": 1},
+        "rows_read": {"type": "integer", "minimum": 0},
+        "rows_loaded": {"type": "integer", "minimum": 0},
+        "rows_excluded": {"type": "integer", "minimum": 0},
+        "excluded_by_reason": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["missing_field", "invalid_date", "missing_result", "invalid_value",
+                       "same_team", "contract_violation", "duplicate"],
+          "properties": {
+            "missing_field": {"type": "integer", "minimum": 0},
+            "invalid_date": {"type": "integer", "minimum": 0},
+            "missing_result": {"type": "integer", "minimum": 0},
+            "invalid_value": {"type": "integer", "minimum": 0},
+            "same_team": {"type": "integer", "minimum": 0},
+            "contract_violation": {"type": "integer", "minimum": 0},
+            "duplicate": {"type": "integer", "minimum": 0}
+          }
+        },
+        "violations_by_rule": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ht_le_ft_home", "ht_le_ft_away", "ft_result_consistent",
+                       "ht_result_consistent", "sot_le_shots_home", "sot_le_shots_away",
+                       "odds_min", "max_odds_ge_avg", "date_in_range"],
+          "properties": {
+            "ht_le_ft_home": {"type": "integer", "minimum": 0},
+            "ht_le_ft_away": {"type": "integer", "minimum": 0},
+            "ft_result_consistent": {"type": "integer", "minimum": 0},
+            "ht_result_consistent": {"type": "integer", "minimum": 0},
+            "sot_le_shots_home": {"type": "integer", "minimum": 0},
+            "sot_le_shots_away": {"type": "integer", "minimum": 0},
+            "odds_min": {"type": "integer", "minimum": 0},
+            "max_odds_ge_avg": {"type": "integer", "minimum": 0},
+            "date_in_range": {"type": "integer", "minimum": 0}
+          }
+        },
+        "matches_inserted": {"type": "integer", "minimum": 0},
+        "matches_updated": {"type": "integer", "minimum": 0},
+        "matches_unchanged": {"type": "integer", "minimum": 0},
+        "matches_removed": {"type": "integer", "minimum": 0},
+        "excluded_rows_removed": {"type": "integer", "minimum": 0},
+        "duration_seconds": {"type": "number", "minimum": 0}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "error", "message"],
+      "properties": {
+        "status": {"const": "failed"},
+        "error": {
+          "enum": ["unexpected_error", "configuration_error", "source_unavailable", "missing_columns",
+                   "malformed_source", "concurrent_run", "database_error", "accounting_error",
+                   "contract_schema_error"]
+        },
+        "message": {"type": "string"}
+      }
+    }
+  ]
+}
