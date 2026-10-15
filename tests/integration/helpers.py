@@ -85,3 +85,33 @@ def catalog_snapshot(conn: psycopg.Connection) -> dict[str, list[tuple[object, .
         name: [tuple(row) for row in conn.execute(query.encode()).fetchall()]
         for name, query in queries.items()
     }
+
+
+_CONTENT_QUERIES: dict[str, str] = {
+    "leagues": "SELECT league_code FROM leagues ORDER BY 1",
+    "teams": "SELECT team_key, name FROM teams ORDER BY team_key",
+    "matches": (
+        "SELECT (to_jsonb(m) - 'match_id' - 'home_team_id' - 'away_team_id') "
+        "|| jsonb_build_object('home_team_key', h.team_key, 'away_team_key', a.team_key) "
+        "FROM matches m JOIN teams h ON h.team_id = m.home_team_id "
+        "JOIN teams a ON a.team_id = m.away_team_id "
+        "ORDER BY m.league_code, m.match_date, h.team_key, a.team_key"
+    ),
+    "excluded_rows": (
+        "SELECT to_jsonb(e) - 'excluded_row_id' - 'run_id' FROM excluded_rows e "
+        "ORDER BY source_sha256, source_row_number"
+    ),
+}
+
+
+def content_snapshot(conn: psycopg.Connection) -> dict[str, list[object]]:
+    """Return table contents without surrogate ids or run links (research.md R12).
+
+    Two databases are "identical" for the data contract when these snapshots are equal.
+    ``ingest_runs`` is an append-only audit log and is not compared.
+    """
+    result: dict[str, list[object]] = {}
+    for table, query in _CONTENT_QUERIES.items():
+        rows = conn.execute(query.encode()).fetchall()
+        result[table] = [row[0] if len(row) == 1 else tuple(row) for row in rows]
+    return result
