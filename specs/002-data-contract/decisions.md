@@ -291,3 +291,10 @@ Reasoning: plan-review round 3, minor finding 2. No contract expression reads te
 key and no `home <> away` CHECK. Upserting every fixture team first would add code that the test
 does not need. The per-case test still seeds teams 1 and 2 because it also does a real INSERT
 into `matches`.
+
+### I-6: The convergence log assertion uses a small handler instead of `caplog`
+Deviation: `test_rerun_removes_now_violating_matches` asserts the `converge ...` log line through
+`helpers.capture_messages()` (a list handler on the `football_stats` logger) instead of `caplog`.
+Reasoning: the test runs `alembic upgrade` in-process, and `migrations/env.py` calls
+`logging.config.fileConfig`, which replaces the root handlers, including caplog's. The assertion
+(exact message text) is the one the task asked for.

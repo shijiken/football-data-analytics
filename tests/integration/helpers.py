@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import json
+import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import psycopg
@@ -12,7 +16,7 @@ from alembic.config import Config
 from psycopg.types.json import Jsonb
 
 from football_stats import clean, extract, validate
-from football_stats.data_contract import PRE_CONTRACT
+from football_stats.data_contract import CURRENT_CONTRACT, PRE_CONTRACT
 from football_stats.source_contract import MATCH_KEY_COLUMNS, MATCH_STAGING_COLUMNS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -196,3 +200,55 @@ def seed_pre_contract(database_url: str, source: Path, run_date: dt.date) -> str
                 (run[0], sha, number, reason, detail, Jsonb(raw_record)),
             )
     return sha
+
+
+def assert_contract_validates_read_only(db_url: str) -> None:
+    """Prove every loaded match satisfies every rule, leaving the catalog untouched (R8)."""
+    with psycopg.connect(db_url) as conn:
+        for rule_id in CURRENT_CONTRACT.rule_ids:
+            conn.execute(
+                f"ALTER TABLE matches VALIDATE CONSTRAINT matches_contract_{rule_id}".encode()
+            )
+        conn.rollback()
+        flags = conn.execute(
+            "SELECT convalidated FROM pg_constraint WHERE conrelid = 'matches'::regclass "
+            "AND conname LIKE 'matches_contract_%'"
+        ).fetchall()
+    assert flags == [(False,)] * len(CURRENT_CONTRACT.rule_ids)
+
+
+def load_expected(name: str) -> dict[str, object]:
+    """Read a fixture ``*.expected.json`` file (keys are 1-based source row numbers)."""
+    path = REPO_ROOT / "tests" / "fixtures" / name
+    document: dict[str, object] = json.loads(path.read_text("utf-8"))
+    return document
+
+
+class _ListHandler(logging.Handler):
+    """Collect formatted messages of every record it receives."""
+
+    def __init__(self) -> None:
+        super().__init__(logging.INFO)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
+@contextmanager
+def capture_messages() -> Iterator[list[str]]:
+    """Capture INFO+ messages of the ``football_stats`` loggers.
+
+    Used instead of ``caplog`` in tests that run Alembic in-process: ``migrations/env.py`` calls
+    ``logging.config.fileConfig``, which replaces the root handlers (including caplog's).
+    """
+    logger = logging.getLogger("football_stats")
+    handler = _ListHandler()
+    previous_level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    try:
+        yield handler.messages
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)

@@ -115,3 +115,40 @@ def test_db_clock_behind_run_date_fails_before_writes(
     assert db_date is not None
     assert db_date[0].isoformat() in str(info.value)
     assert helpers.snapshot(db_conn) == before
+
+
+def test_failure_after_convergence_rolls_back(empty_db_url: str) -> None:
+    source = fixture_path("matches_contract.csv")
+    sha = helpers.seed_pre_contract(empty_db_url, source, RUN_DATE)
+    helpers.upgrade(empty_db_url)
+    part = partition_file(source)
+    batch = clean.build_batch(part.accepted, sha)
+    bogus = part.excluded.with_columns(
+        pl.when(pl.col("source_row_number") == pl.col("source_row_number").min())
+        .then(pl.lit("bogus"))
+        .otherwise(pl.col("reason"))
+        .alias("reason")
+    )
+    meta = dataclasses.replace(
+        _run_meta(),
+        source_sha256=sha,
+        rows_read=part.rows_read,
+        rows_excluded=part.excluded.height,
+        excluded_by_reason=part.counts_by_reason(),
+        violations_by_rule=part.violations_by_rule(),
+    )
+    with psycopg.connect(empty_db_url) as conn:
+        before = helpers.snapshot(conn)
+        conn.commit()
+        # The excluded-row upsert is the last step; it fails after the convergence deletes ran.
+        with pytest.raises(LoadError):
+            load.load_run(conn, batch, bogus, meta)
+        assert helpers.snapshot(conn) == before
+        conn.commit()
+
+        # Positive control: the same load with valid exclusions does delete the 13 matches, so
+        # the rollback above is what kept them.
+        counts = load.load_run(conn, batch, part.excluded, meta)
+        assert (counts.matches_removed, counts.excluded_rows_removed) == (13, 1)
+        remaining = conn.execute("SELECT count(*) FROM matches").fetchone()
+        assert remaining == (5,)

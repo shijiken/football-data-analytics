@@ -119,25 +119,10 @@ def test_date_in_range_boundary_uses_run_start_date(
     ).fetchall() == [(2, "contract_violation", "date_in_range")]
 
 
-def _validate_all_in_rolled_back_transaction(db_url: str) -> None:
-    """Prove every loaded match satisfies every rule, leaving the catalog untouched (R8)."""
-    with psycopg.connect(db_url) as conn:
-        for rule_id in CURRENT_CONTRACT.rule_ids:
-            conn.execute(
-                f"ALTER TABLE matches VALIDATE CONSTRAINT matches_contract_{rule_id}".encode()
-            )
-        conn.rollback()
-        flags = conn.execute(
-            "SELECT convalidated FROM pg_constraint WHERE conrelid = 'matches'::regclass "
-            "AND conname LIKE 'matches_contract_%'"
-        ).fetchall()
-    assert flags == [(False,)] * len(CURRENT_CONTRACT.rule_ids)
-
-
 def test_no_loaded_match_violates_contract(settings: Settings, db_url: str) -> None:
     for name in ("matches_contract.csv", "matches_real_sample.csv"):
         pipeline.run(settings, source_file=fixture_path(name), started_at=CONTRACT_STARTED_AT)
-    _validate_all_in_rolled_back_transaction(db_url)
+    helpers.assert_contract_validates_read_only(db_url)
 
 
 def test_upsert_rewrites_existing_violating_match(
