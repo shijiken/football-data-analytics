@@ -298,3 +298,85 @@ Deviation: `test_rerun_removes_now_violating_matches` asserts the `converge ...`
 Reasoning: the test runs `alembic upgrade` in-process, and `migrations/env.py` calls
 `logging.config.fileConfig`, which replaces the root handlers, including caplog's. The assertion
 (exact message text) is the one the task asked for.
+
+### I-7: Quickstart section 1 rebuilds the `ingest` image with `--profile ingest`
+Deviation: `quickstart.md` section 1 now says `docker compose --profile ingest build` instead of
+`docker compose build`.
+Reasoning: found during T036. The `ingest` service is behind a Compose profile, so plain
+`docker compose build` rebuilt only `migrate`. The first converging run then used the stale
+feature-001 `ingest` image, which does not know the contract. That run failed safely: the database
+refused the old code's rows with `matches_contract_sot_le_shots_home` (`database_error`, exit 7),
+rolled back, and left the data unchanged (238,854 matches, 5 excluded rows). It is the intended
+safety net working, but the instruction was misleading. After `--profile ingest build` the run gave
+the expected numbers. No expected value was edited.
+
+## FR-011 real-data review
+
+Source: T036, 2026-10-15, pinned `Matches.csv` (sha256 `ef224cf2...4221`), contract version 1,
+Apple M3 / 16 GB / Docker Engine 29.8.2. Rows read: 238,859; loaded 237,473; excluded 1,386
+(`missing_field` 1, `missing_result` 4, `contract_violation` 1,381). Leagues 38, teams 1,221.
+
+Every measured value equals the planning profile (research.md R16) and quickstart.md. Nothing was
+edited to fit.
+
+| Rule | Rows violating | Share of rows read | Above 1 %? |
+|---|---:|---:|---|
+| `ht_le_ft_home` | 0 | 0 % | no |
+| `ht_le_ft_away` | 0 | 0 % | no |
+| `ft_result_consistent` | 0 | 0 % | no |
+| `ht_result_consistent` | 0 | 0 % | no |
+| `sot_le_shots_home` | 7 | 0.0029 % | no |
+| `sot_le_shots_away` | 13 | 0.0054 % | no |
+| `odds_min` | 8 | 0.0033 % | no |
+| `max_odds_ge_avg` | 1,357 | 0.5681 % | no |
+| `date_in_range` | 0 | 0 % | no |
+| rows with at least one violation | 1,381 | 0.5782 % | no |
+
+Rules above 1 %: none, so no keep / adjust / drop decision is required by FR-011.
+
+Observation, `max_odds_ge_avg` (largest share): decision **keep**, as the spec defines it.
+- Measured on the 1,357 violating rows (the term counts add to more than 1,357 because a row can
+  break more than one outcome): home 469, draw 409, away 534 violating outcomes. The median gap
+  (average odd minus maximum odd) is 0.05 (home), 0.06 (draw) and 0.10 (away); means are 0.105,
+  0.111 and 0.238; the largest gap is 6.08 (away).
+- Matches span 2005-08-05 to 2022-04-05. Years with the most violations: 2008 (302), 2010 (183),
+  2009 (177), 2006 (159). Divisions: F2 165, E3 135, E2 129, E1 98, SC2 97, I2 91.
+- Interpretation: a maximum below the average is impossible if both come from the same bookmaker
+  set at the same time. The pattern (small gaps, lower divisions, one period) fits averages and
+  maxima taken from different bookmaker sets or timestamps in the original source. It is a source
+  defect, and the rows are recorded in `excluded_rows` with the rule id, not dropped silently. At
+  0.57 % the loss is small. If a later phase needs those matches, the right fix is to relax or
+  split the rule with a new contract version (and a migration), not to edit the data.
+
+Other rules: `sot_le_shots_*` (20 rows) and `odds_min` (8 rows) are tiny sets that confirm the
+checks work; the `odds_min` rows are the 8 zero odds that 001 recorded as a quirk (7 with
+`OddHome = 0.0`, 1 with `MaxAway = 0.0`). The four result and half-time rules find nothing,
+consistent with 001 R2.
+
+Other T036 results:
+- Quickstart 1: both `migrate` runs exit 0; version `0003_contract_constraints`; nine constraints
+  with `convalidated = f`; the two existing runs show `contract_version 0` and `{}`; 238,854 matches
+  after the migration.
+- Quickstart 2: converging re-run `matches_removed` 1,381, `matches_unchanged` 237,473,
+  `excluded_rows_removed` 0, no team or league removed. `VALIDATE CONSTRAINT` of all nine inside
+  `BEGIN ... ROLLBACK` succeeded; afterwards 0 of 9 are validated.
+- Quickstart 3: fresh run on an empty database inserted 237,473 matches; wall time 17.1 s,
+  `duration_seconds` 14.4 s (SC-005: under 5 minutes).
+- Quickstart 4: re-run is a no-op (0 inserted, 0 updated, 237,473 unchanged, 0 removed).
+- Quickstart 5: violation details `max_odds_ge_avg` 1,356; `sot_le_shots_away` 10; `odds_min` 7;
+  `sot_le_shots_home` 4; `sot_le_shots_home, sot_le_shots_away` 3; `odds_min, max_odds_ge_avg` 1.
+  The latest run shows version 1 and 1,357.
+- Quickstart 6: an update that breaks `ht_le_ft_home` is rejected by
+  `matches_contract_ht_le_ft_home`.
+- Quickstart 7: `verify --sample 20 --seed 42` reports 20 checked, no differences.
+- Port collision: `.env` already sets `POSTGRES_PORT=55432` (a local PostgreSQL holds 5432), so
+  nothing collided.
+
+### I-8: `scripts/smoke_compose.sh` needs a fresh image on a developer machine
+Observation, no code change (the task forbids editing the script): the script never builds, so on
+a machine that already has `football_smoke-*` images from feature 001, `docker compose run` reuses
+the old image. The first T037 run therefore passed against the stale 001 image (six reason keys, no
+`0003`). I rebuilt with `docker compose -p football_smoke --env-file .env.example --profile ingest
+build` and ran it again: the output shows the migrations `0001 -> 0002 -> 0003`,
+`alembic_version = 0003_contract_constraints` (identical after the second migrate) and the fixture
+ingest succeeded. CI starts from a clean runner, where the image is always built.

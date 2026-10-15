@@ -190,27 +190,36 @@ specs/                spec, plan, research, data model, contracts, tasks, decisi
 
 ## Measured numbers - data contract
 
-Recorded by task T036, which runs
-[`quickstart.md`](specs/002-data-contract/quickstart.md) against the real pinned dataset.
+Recorded by task T036, which ran [`quickstart.md`](specs/002-data-contract/quickstart.md) against
+the real pinned dataset (sha256 `ef224cf2...4221`, re-downloaded and re-verified by each run).
 
 | Item | Value |
 |---|---|
-| Run date (UTC) / contract version | TBD-T036 |
-| Rows read / loaded / excluded | TBD-T036 |
-| Machine | TBD-T036 |
-| SC-005 fresh full run (target under 5 min): wall time / `duration_seconds` | TBD-T036 |
-| Converging re-run of the feature-001 database: `matches_removed` | TBD-T036 |
+| Run date (UTC) / contract version | 2026-10-15 / 1 |
+| Rows read / loaded / excluded | 238,859 / 237,473 / 1,386 (`missing_field` 1, `missing_result` 4, `contract_violation` 1,381) |
+| Leagues / teams | 38 / 1,221 |
+| Machine (CPU / RAM / Docker) | Apple M3 / 16 GB / Docker Engine 29.8.2 (Docker Desktop) |
+| SC-005 fresh full run (target under 5 min): wall time / `duration_seconds` | 17.1 s / 14.4 s (`time docker compose run --rm ingest` on an empty database: download, hash, clean, validate, load) |
+| Converging re-run of the feature-001 database (238,854 matches): `matches_removed` | 1,381 (wall time 13.1 s, `duration_seconds` 10.5 s); 237,473 matches unchanged |
+| Re-run of the converged database | 0 inserted, 0 updated, 0 removed, 237,473 unchanged (9.3 s) |
 
-Violations per rule (share of rows read):
+Violations per rule (rows read: 238,859):
 
 | Rule id | Rows violating | Share of rows read |
 |---|---:|---:|
-| `ht_le_ft_home` | TBD-T036 | TBD-T036 |
-| `ht_le_ft_away` | TBD-T036 | TBD-T036 |
-| `ft_result_consistent` | TBD-T036 | TBD-T036 |
-| `ht_result_consistent` | TBD-T036 | TBD-T036 |
-| `sot_le_shots_home` | TBD-T036 | TBD-T036 |
-| `sot_le_shots_away` | TBD-T036 | TBD-T036 |
-| `odds_min` | TBD-T036 | TBD-T036 |
-| `max_odds_ge_avg` | TBD-T036 | TBD-T036 |
-| `date_in_range` | TBD-T036 | TBD-T036 |
+| `ht_le_ft_home` | 0 | 0 % |
+| `ht_le_ft_away` | 0 | 0 % |
+| `ft_result_consistent` | 0 | 0 % |
+| `ht_result_consistent` | 0 | 0 % |
+| `sot_le_shots_home` | 7 | 0.0029 % |
+| `sot_le_shots_away` | 13 | 0.0054 % |
+| `odds_min` | 8 | 0.0033 % |
+| `max_odds_ge_avg` | 1,357 | 0.5681 % |
+| `date_in_range` | 0 | 0 % |
+| rows with at least one violation | 1,381 (4 rows break two rules) | 0.5782 % |
+
+No rule exceeds the 1 % review threshold; the largest, `max_odds_ge_avg`, is discussed in
+[`decisions.md`](specs/002-data-contract/decisions.md) ("FR-011 real-data review"). The numbers equal
+the planning profile of `research.md` R16 exactly. The nine constraints were also proven against the
+whole converged table with `VALIDATE CONSTRAINT` inside a rolled-back transaction (all succeeded,
+catalog unchanged), and `verify --sample 20 --seed 42` reports no differences.

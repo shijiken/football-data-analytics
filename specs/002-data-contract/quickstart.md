@@ -29,7 +29,7 @@ Start from the database left by feature 001 (238,854 matches, 5 excluded rows, r
 feature and running `docker compose run --rm ingest` once.
 
 ```bash
-docker compose build
+docker compose --profile ingest build   # `ingest` is behind a profile; plain `build` skips it
 docker compose run --rm migrate          # applies 0002 and 0003
 docker compose run --rm migrate          # second time: no-op (FR-008)
 docker compose exec db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c \
