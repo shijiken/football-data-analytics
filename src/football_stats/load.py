@@ -12,7 +12,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from football_stats.clean import CleanBatch
-from football_stats.errors import AccountingError, ConcurrentRunError, LoadError
+from football_stats.errors import AccountingError, ClockSkewError, ConcurrentRunError, LoadError
 from football_stats.source_contract import (
     MATCH_KEY_COLUMNS,
     MATCH_STAGING_COLUMNS,
@@ -39,6 +39,9 @@ class RunMeta:
     rows_read: int
     rows_excluded: int
     excluded_by_reason: dict[str, int]
+    run_date: dt.date
+    contract_version: int
+    violations_by_rule: dict[str, int]
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,8 @@ class LoadCounts:
     matches_inserted: int
     matches_updated: int
     matches_unchanged: int
+    matches_removed: int = 0
+    excluded_rows_removed: int = 0
 
 
 def _idents(columns: tuple[str, ...], prefix: str = "") -> sql.Composable:
@@ -143,6 +148,21 @@ def _persist_excluded(
     )
 
 
+def _check_clock(cur: psycopg.Cursor, run_date: dt.date) -> None:
+    """Refuse to start if the database's UTC date is earlier than the run date (R8).
+
+    The ``date_in_range`` CHECK uses the database's UTC date as its upper bound; if that were
+    earlier than the pipeline's bound the database could reject a row the pipeline accepted,
+    halfway through the load. Detect it before any write instead.
+    """
+    row = cur.execute("SELECT (now() AT TIME ZONE 'UTC')::date").fetchone()
+    if row is None:
+        raise LoadError("could not read the database date")
+    db_date = row[0]
+    if db_date < run_date:
+        raise ClockSkewError(f"database UTC date {db_date} is earlier than run date {run_date}")
+
+
 def load_run(
     conn: psycopg.Connection,
     batch: CleanBatch,
@@ -170,6 +190,7 @@ def load_run(
             locked = cur.execute("SELECT pg_try_advisory_xact_lock(%s)", (LOCK_KEY,)).fetchone()
             if locked is None or not locked[0]:
                 raise ConcurrentRunError("Another ingest run is in progress")
+            _check_clock(cur, run.run_date)
             _create_staging(cur)
             _copy_frame(cur, "stg_matches", MATCH_STAGING_COLUMNS, batch.matches)
             _copy_frame(cur, "stg_teams", ("team_key", "name"), batch.teams)
@@ -202,12 +223,16 @@ def load_run(
             updated = len(returned) - inserted
             unchanged = batch.matches.height - len(returned)
 
+            matches_removed = 0  # convergence deletes arrive with User Story 3
+            excluded_rows_removed = 0
+
             row = cur.execute(
                 "INSERT INTO ingest_runs (started_at, finished_at, source_url, source_sha256, "
                 "source_bytes, raw_path, rows_read, rows_loaded, rows_excluded, "
-                "excluded_by_reason, matches_inserted, matches_updated, matches_unchanged) "
-                "VALUES (%s, clock_timestamp(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
-                "RETURNING run_id",
+                "excluded_by_reason, contract_version, violations_by_rule, matches_inserted, "
+                "matches_updated, matches_unchanged, matches_removed, excluded_rows_removed) "
+                "VALUES (%s, clock_timestamp(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                "%s, %s, %s) RETURNING run_id",
                 (
                     run.started_at,
                     run.source_url,
@@ -218,9 +243,13 @@ def load_run(
                     batch.matches.height,
                     run.rows_excluded,
                     Jsonb(run.excluded_by_reason),
+                    run.contract_version,
+                    Jsonb(run.violations_by_rule),
                     inserted,
                     updated,
                     unchanged,
+                    matches_removed,
+                    excluded_rows_removed,
                 ),
             ).fetchone()
             if row is None:
@@ -229,4 +258,4 @@ def load_run(
             _persist_excluded(cur, run_id, run.source_sha256, excluded)
     except psycopg.Error as exc:
         raise LoadError(f"Database load failed and was rolled back: {exc}") from exc
-    return LoadCounts(run_id, inserted, updated, unchanged)
+    return LoadCounts(run_id, inserted, updated, unchanged, matches_removed, excluded_rows_removed)

@@ -10,13 +10,12 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from football_stats import load
+from football_stats.data_contract import CONTRACT_VERSION
 from tests.conftest import fixture_path
 from tests.integration.helpers import REPO_ROOT
 
 SCHEMA = json.loads(
-    (REPO_ROOT / "specs/001-match-data-ingestion/contracts/run-report.schema.json").read_text(
-        "utf-8"
-    )
+    (REPO_ROOT / "specs/002-data-contract/contracts/run-report.schema.json").read_text("utf-8")
 )
 
 
@@ -56,6 +55,14 @@ def test_cli_ingest_report_matches_schema(db_url: str, tmp_path: Path) -> None:
     assert proc.returncode == 0, proc.stderr
     assert report["status"] == "succeeded"
     assert (report["rows_read"], report["rows_loaded"], report["rows_excluded"]) == (12, 12, 0)
+    by_reason = report["excluded_by_reason"]
+    by_rule = report["violations_by_rule"]
+    assert isinstance(by_reason, dict)
+    assert isinstance(by_rule, dict)
+    assert report["rows_excluded"] == sum(by_reason.values())
+    assert by_reason["contract_violation"] <= sum(by_rule.values())
+    assert (by_reason["contract_violation"] == 0) == (sum(by_rule.values()) == 0)
+    assert report["contract_version"] == CONTRACT_VERSION
 
 
 @pytest.mark.parametrize(

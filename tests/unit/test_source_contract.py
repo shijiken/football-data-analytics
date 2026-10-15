@@ -47,5 +47,6 @@ def test_exclusion_reasons_in_precedence_order() -> None:
         "missing_result",
         "invalid_value",
         "same_team",
+        "contract_violation",
         "duplicate",
     ]

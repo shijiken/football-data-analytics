@@ -17,8 +17,9 @@ _SNAPSHOT_QUERIES: dict[str, str] = {
     "excluded_rows": "SELECT * FROM excluded_rows ORDER BY excluded_row_id",
     "ingest_runs": (
         "SELECT run_id, source_url, source_sha256, source_bytes, raw_path, rows_read, "
-        "rows_loaded, rows_excluded, excluded_by_reason, matches_inserted, matches_updated, "
-        "matches_unchanged FROM ingest_runs ORDER BY run_id"
+        "rows_loaded, rows_excluded, excluded_by_reason, contract_version, violations_by_rule, "
+        "matches_inserted, matches_updated, matches_unchanged, matches_removed, "
+        "excluded_rows_removed FROM ingest_runs ORDER BY run_id"
     ),
 }
 

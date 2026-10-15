@@ -127,13 +127,17 @@ def _run(conn: psycopg.Connection, **overrides: Any) -> Any:
         "matches_inserted": 4,
         "matches_updated": 1,
         "matches_unchanged": 1,
+        "contract_version": 1,
+        "matches_removed": 0,
+        "excluded_rows_removed": 0,
     }
     values.update(overrides)
-    cols = list(values)
+    values.setdefault("violations_by_rule", "{}")
+    cols = [c for c in values if c != "violations_by_rule"]
     return conn.execute(
         "INSERT INTO ingest_runs (started_at, finished_at, excluded_by_reason, "
-        + ", ".join(cols)
-        + ") VALUES (now(), now(), '{}'::jsonb, "
+        "violations_by_rule, " + ", ".join(cols) + ") VALUES (now(), now(), '{}'::jsonb, "
+        "%(violations_by_rule)s::jsonb, "
         + ", ".join(f"%({c})s" for c in cols)
         + ") RETURNING run_id",
         values,
@@ -161,5 +165,26 @@ def test_excluded_rows_reason_check(db_conn: psycopg.Connection) -> None:
         )
 
     insert("missing_field", 1)
+    insert("contract_violation", 3)
     with _expect(db_conn, errors.CheckViolation):
         insert("bogus", 2)
+
+
+def test_ingest_runs_contract_columns_checks(db_conn: psycopg.Connection) -> None:
+    for column, bad in (
+        ("contract_version", -1),
+        ("matches_removed", -1),
+        ("excluded_rows_removed", -1),
+        ("violations_by_rule", "[]"),
+    ):
+        with _expect(db_conn, errors.CheckViolation):
+            _run(db_conn, **{column: bad})
+    with _expect(db_conn, errors.NotNullViolation):
+        db_conn.execute(
+            "INSERT INTO ingest_runs (started_at, finished_at, source_url, source_sha256, "
+            "source_bytes, raw_path, rows_read, rows_loaded, rows_excluded, excluded_by_reason, "
+            "matches_inserted, matches_updated, matches_unchanged, violations_by_rule, "
+            "matches_removed, excluded_rows_removed) VALUES (now(), now(), 'u', %s, 1, 'p', "
+            "0, 0, 0, '{}'::jsonb, 0, 0, 0, '{}'::jsonb, 0, 0)",
+            (SHA,),
+        )

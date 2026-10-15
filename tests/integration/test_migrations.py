@@ -72,6 +72,49 @@ def test_upgrade_creates_schema(empty_db_url: str) -> None:
             "excluded_rows_run_id_idx",
         } <= indexes
 
+        run_columns = {
+            r[0]: (r[1], r[2], r[3])
+            for r in conn.execute(
+                "SELECT column_name, data_type, is_nullable, column_default "
+                "FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'ingest_runs' "
+                "AND column_name IN ('contract_version', 'violations_by_rule', "
+                "'matches_removed', 'excluded_rows_removed')"
+            ).fetchall()
+        }
+        assert run_columns == {
+            "contract_version": ("integer", "NO", None),
+            "violations_by_rule": ("jsonb", "NO", None),
+            "matches_removed": ("integer", "NO", None),
+            "excluded_rows_removed": ("integer", "NO", None),
+        }
+        reason_check = conn.execute(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+            "WHERE conname = 'excluded_rows_reason_check'"
+        ).fetchone()
+        assert reason_check is not None
+        assert "'contract_violation'" in reason_check[0]
+
+
+def test_upgrade_backfills_existing_runs(empty_db_url: str) -> None:
+    helpers.upgrade(empty_db_url, "0001_initial_schema")
+    with psycopg.connect(empty_db_url) as conn:
+        conn.execute(
+            "INSERT INTO ingest_runs (started_at, finished_at, source_url, source_sha256, "
+            "source_bytes, raw_path, rows_read, rows_loaded, rows_excluded, excluded_by_reason, "
+            "matches_inserted, matches_updated, matches_unchanged) VALUES (now(), now(), "
+            "'file:///x.csv', %s, 1, '/x', 3, 2, 1, '{}'::jsonb, 2, 0, 0)",
+            ("a" * 64,),
+        )
+        conn.commit()
+    helpers.upgrade(empty_db_url)
+    with psycopg.connect(empty_db_url) as conn:
+        row = conn.execute(
+            "SELECT contract_version, violations_by_rule, matches_removed, "
+            "excluded_rows_removed FROM ingest_runs"
+        ).fetchall()
+    assert row == [(0, {}, 0, 0)]
+
 
 def test_upgrade_is_noop_at_head(empty_db_url: str) -> None:
     helpers.upgrade(empty_db_url)
@@ -82,7 +125,7 @@ def test_upgrade_is_noop_at_head(empty_db_url: str) -> None:
     with psycopg.connect(empty_db_url) as conn:
         assert helpers.catalog_snapshot(conn) == before
         assert conn.execute("SELECT version_num FROM alembic_version").fetchall() == version_before
-    assert version_before == [("0001_initial_schema",)]
+    assert version_before == [("0002_contract_run_metadata",)]
 
 
 def test_downgrade_then_upgrade_roundtrip(empty_db_url: str) -> None:

@@ -241,3 +241,33 @@ Response: FIXED
 Reasoning: T024, R-parity text and data-model now use
 `LIKE matches INCLUDING DEFAULTS INCLUDING IDENTITY`; CHECK constraints are still not copied
 (that needs `INCLUDING CONSTRAINTS`).
+
+## Implementation deviations
+
+### I-1: `test_run_date_after_all_fixture_dates` lives in T011's file and scans raw bytes
+Deviation: tasks.md T010 adds the guard to `tests/unit/test_data_contract.py` and T011 then writes
+the same file. The guard is written once, as part of T011, and T010 only changes
+`tests/stages.py`. It scans the raw bytes of every `tests/fixtures/*.csv` with the regex
+`^[^,\r\n]*,(\d{4}-\d{2}-\d{2})` (second field of each line) and `date.fromisoformat` with
+skip-on-`ValueError`, not the pipeline CSV reader.
+Reasoning: plan-review round 3, minor finding 1. Some fixtures are intentionally invalid UTF-8,
+ragged or have a duplicate header, so the strict reader would raise on them. Two tasks owning one
+file was ambiguous. Behaviour is the same as specified: every parseable `MatchDate` except the
+synthetic `2999-01-01` is `<= RUN_DATE` and `<= CONTRACT_STARTED_AT.date()`.
+
+### I-3: One feature-001 test edits its input so it stays contract-valid
+Deviation: `tests/integration/test_idempotency.py::test_changed_source_updates_match_in_place`
+rewrites row 1 to full time 0-3 `A` and, after this change, also rewrites half time to 0-1 `A`.
+The expectation `(inserted, updated, unchanged) == (0, 12, 0)` is unchanged.
+Reasoning: the old edit left half time at 1-0 `H`, which breaks `ht_le_ft_home` (half-time home
+goals 1 exceed full-time 0). Under contract version 1 that row is now correctly excluded and the
+test saw 11 updates. This is the same situation as the repaired `matches_edge_cases.csv` rows
+(research.md R17): the test is about in-place updates, not about half-time data, so its input was
+made consistent. No assertion was lowered.
+
+### I-4: `Partition.violations` and `Partition.rule_ids` have defaults
+Deviation: the two new `Partition` fields have defaults (an empty violations frame, no rule ids)
+instead of being required.
+Reasoning: feature 001's `test_partition_rejects_inconsistent_counts` builds
+`Partition(accepted=..., excluded=..., rows_read=...)` directly, and the instructions forbid
+editing a feature-001 test expectation. `validate.partition` always passes both fields.

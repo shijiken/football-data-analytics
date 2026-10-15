@@ -100,6 +100,7 @@ def test_ingest_report_counts(settings: Settings, db_conn: psycopg.Connection) -
             "missing_result",
             "invalid_value",
             "same_team",
+            "contract_violation",
             "duplicate",
         ],
         0,
