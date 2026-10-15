@@ -217,10 +217,12 @@ argument; they never read a clock. `pipeline.run(settings, source_file=None, *, 
 CURRENT_CONTRACT, started_at=None)` uses `started_at` (default `dt.datetime.now(dt.UTC)`, must be
 timezone-aware) for both `ingest_runs.started_at` and `run_date = started_at.astimezone(dt.UTC).date()`.
 `run_date` also travels to the loader in `RunMeta.run_date` for the clock check of R8. Unit tests
-use the constant `RUN_DATE = dt.date(2021, 6, 30)` from `tests/stages.py`; integration tests that
+use the constant `RUN_DATE = dt.date(2023, 6, 30)` from `tests/stages.py`; integration tests that
 ingest `matches_contract.csv` or test a date boundary pass `started_at=CONTRACT_STARTED_AT =
-dt.datetime(2021, 6, 30, 12, 0, tzinfo=dt.UTC)`. Both lie well in the past, so no test depends on
-the real clock of the host or of the database container (plan review P1-2).
+dt.datetime(2023, 6, 30, 12, 0, tzinfo=dt.UTC)`. Both lie after every fixture match date (latest
+2022-02-07) and in the past, so no contract outcome depends on the real clock (plan review P1-2,
+P2-1). Ingests that omit `started_at` (including feature-001 tests) still use `now()`; they are
+deterministic only because every fixture date is in the past (P2-2).
 
 **Rationale**: Spec: "run date is the date the run starts, in UTC". Injecting it makes the only
 time-dependent rule deterministic in tests (planner rule), and using the same instant for the run
@@ -500,7 +502,7 @@ instruction and SC-004 "0 differences"); comparing with ids (impossible by const
   `{run_date+1}` placeholders). The unit test runs each case through `validate.partition`. The
   integration test compares **every constraint separately** (plan review P1-3), because PostgreSQL
   reports only the first failing CHECK. It copies the parsed row into a temp table
-  `CREATE TEMP TABLE probe (LIKE matches)`, which copies no CHECK constraints. For each
+  `CREATE TEMP TABLE probe (LIKE matches INCLUDING DEFAULTS INCLUDING IDENTITY)`, which copies no CHECK constraints. For each
   `matches_contract_*` constraint it reads the expression with `pg_get_expr(conbin, conrelid)` and
   evaluates `SELECT (<expr>) IS NOT FALSE FROM probe`. It then asserts that the set of failing
   constraint names equals `{matches_contract_<r> for r in case.violated}`. It also asserts that a

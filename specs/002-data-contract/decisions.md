@@ -207,3 +207,37 @@ Reasoning:
   invariants on the CLI report in `test_cli_ingest_report_matches_schema`.
 - **(c)** T034 must use the literal placeholder `TBD-T036`, and T037 checks that
   `grep -n "TBD-T036" README.md` prints nothing.
+
+### P2-1: Default RUN_DATE 2021-06-30 turns a feature-001 real-sample row into a contract violation
+Finding: `matches_real_sample.csv` row 15 is dated 2022-02-07; under `RUN_DATE = 2021-06-30` it
+fails `date_in_range`, breaking `test_accounting.py::test_report_counts_per_reason` (14/2 → 13/3)
+and falsifying P1-2(c) and R17.
+
+Response: FIXED
+
+Reasoning: The reviewer is right; P1-2(c)'s "no expected value changed" only checked
+`matches_contract.csv`. `RUN_DATE` and `CONTRACT_STARTED_AT` move to 2023-06-30, after the latest
+fixture date (2022-02-07) and still in the past. T010 adds
+`test_run_date_after_all_fixture_dates` so a new fixture can't silently regress this. The
+`date_in_range` boundary test keeps its own explicit 2021-06-30/2021-07-01 dates and
+`started_at`, which is independent of the default. Feature-001 expectations are unchanged.
+
+### P2-2: "No test depends on the real clock" overstated
+Finding: Ingests without `started_at` (including feature-001 tests) still use `now()`.
+
+Response: FIXED
+
+Reasoning: plan.md and research R5 now say contract outcomes don't depend on the real clock for
+tests that pass `RUN_DATE`/`CONTRACT_STARTED_AT`, and that the remaining `now()` ingests are
+deterministic only because every fixture date is in the past (which the P2-1 guard test also
+pins).
+
+### P2-3: `LIKE matches` probe table lacks the identity generator
+Finding: `match_id` stays NOT NULL without a generator, so inserts omitting it fail before any
+check.
+
+Response: FIXED
+
+Reasoning: T024, R-parity text and data-model now use
+`LIKE matches INCLUDING DEFAULTS INCLUDING IDENTITY`; CHECK constraints are still not copied
+(that needs `INCLUDING CONSTRAINTS`).

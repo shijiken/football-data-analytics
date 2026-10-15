@@ -133,7 +133,7 @@ first. The 001 table (001 data-model §3) still holds; this feature adds:
 | differential on fixtures | every row of three fixtures, per constraint | — | `test_db_constraints_agree_with_pipeline_on_fixture_rows[*]` |
 
 The integration parity tests evaluate **each constraint's expression separately**
-(`pg_get_expr(conbin, conrelid)` on a constraint-free `LIKE matches` temp table), so the full set of
+(`pg_get_expr(conbin, conrelid)` on a constraint-free `LIKE matches INCLUDING DEFAULTS INCLUDING IDENTITY` temp table), so the full set of
 failing constraints is compared with the full set of violated rules, not just the first constraint
 PostgreSQL reports (R13).
 

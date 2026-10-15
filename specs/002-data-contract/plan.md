@@ -105,11 +105,13 @@ gate green (no skeleton task: the gate exists since 001 T001).
 
 Determinism rules for this feature (in addition to 001's):
 - **No clock in pure code**: `run_date` is an argument (R5). Unit tests use
-  `tests.stages.RUN_DATE = dt.date(2021, 6, 30)`. Integration tests that ingest
+  `tests.stages.RUN_DATE = dt.date(2023, 6, 30)`. Integration tests that ingest
   `matches_contract.csv` or test date boundaries pass `started_at=CONTRACT_STARTED_AT`
-  (`dt.datetime(2021, 6, 30, 12, 0, tzinfo=dt.UTC)`, defined in `tests/stages.py`). Both are years
-  in the past, so no test depends on the host's or the database container's real clock (plan
-  review P1-2). Fixture "future" rows use `2999-01-01`.
+  (`dt.datetime(2023, 6, 30, 12, 0, tzinfo=dt.UTC)`, defined in `tests/stages.py`). Both lie after
+  every fixture match date (latest: 2022-02-07 in `matches_real_sample.csv`, guarded by
+  `test_run_date_after_all_fixture_dates`) and in the past, so no contract outcome depends on the
+  real clock (plan review P1-2, P2-1). Ingest paths that do not pass `started_at` still use
+  `now()`; they are deterministic only because every fixture date is in the past (P2-2). Fixture "future" rows use `2999-01-01`.
 - **Database clock**: the only `now()`-dependent assertions (`date_run_date`/`date_after_run_date`
   parity cases) read the database's own UTC date first and use it as the run date within the same
   transaction, so they cannot straddle midnight. The clock-skew test uses a run date of
@@ -166,7 +168,7 @@ All fixtures use the real 48-column header. Base row **B** = data row 1 of
 
 Each row is B with the listed overrides. Rows 1–16 use `MatchDate` `2020-10-NN` (NN = row number,
 zero-padded) unless overridden. Expected outcomes are with contract version 1 and hold for any
-run date from 2020-11-04 to 2998-12-31; tests use 2021-06-30. "pre" = outcome under `PRE_CONTRACT` (used by the convergence tests).
+run date from 2020-11-04 to 2998-12-31; tests use 2023-06-30. "pre" = outcome under `PRE_CONTRACT` (used by the convergence tests).
 
 | Row | Overrides | v1 outcome (detail) | pre outcome |
 |---|---|---|---|
