@@ -26,3 +26,14 @@ precedence against the per-column checks, duplicates, an orphan league/team for 
 tests). matches_contract.expected.json (contract version 1) and matches_contract.pre.expected.json
 (version 0, feature-001 rules only) record the expected outcome of every row, keyed by the 1-based
 source_row_number; each value is "loaded" or {"reason", "detail"}.
+
+matches_transform.csv (feature 003) is synthetic: 16 rows with the real 48-column header, each the
+first data row of matches_valid.csv with the half-time columns emptied and the date, teams, result
+and Elo overridden. It covers the season boundary (2021-06-30 / 2021-07-01), a calendar-year league
+(ARG), a same-date double match, a 5-match form-window cap, missing and tied Elo values, a
+three-outcome league-season whose rounded shares sum to 0.9999, and one contract-violating row (row
+16, ft_result_consistent) that ingestion excludes and that must never reach a mart.
+matches_transform.expected.json holds the expected staging and mart rows, keyed by the 1-based
+source_row_number and the team key. The values were computed from the row table by a separate
+plain-Python script (no SQL), using Decimal with ROUND_HALF_UP, and were cross-checked
+independently by the plan reviewer (round 1).

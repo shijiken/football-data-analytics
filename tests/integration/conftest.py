@@ -17,7 +17,10 @@ from psycopg import sql
 from testcontainers.postgres import PostgresContainer
 
 from football_stats.config import Settings
+from tests.conftest import fixture_path
 from tests.integration import helpers
+from tests.integration.dbt_runner import DbtResult, dbt_env, run_dbt
+from tests.stages import CONTRACT_STARTED_AT
 
 _counter = itertools.count(1)
 
@@ -169,3 +172,39 @@ def make_settings(tmp_path: Path) -> Callable[[str], Settings]:
         )
 
     return _make
+
+
+@dataclass(frozen=True)
+class TransformedDb:
+    """The session database after one ``dbt build`` of ``matches_transform.csv``."""
+
+    url: str
+    build: DbtResult
+    public_before: helpers.PublicState
+    public_after: helpers.PublicState
+
+
+@pytest.fixture(scope="session")
+def transformed_db(
+    admin_url: str, template_db: str, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[TransformedDb]:
+    """Ingest the transform fixture, build with dbt once, and share the result (read-only).
+
+    The fixture never asserts on the build: tests do, so a failed build shows up as named
+    test failures instead of a setup error.
+    """
+    name = "transform_session"
+    url = _create_database(admin_url, name, template=template_db)
+    base = tmp_path_factory.mktemp("transform_session")
+    try:
+        helpers.ingest_fixture(
+            url, base / "raw", fixture_path("matches_transform.csv"), CONTRACT_STARTED_AT
+        )
+        with psycopg.connect(url) as conn:
+            before = helpers.public_state(conn)
+        build = run_dbt(["build"], dbt_env(url, base / "home", base / "dbt"))
+        with psycopg.connect(url) as conn:
+            after = helpers.public_state(conn)
+        yield TransformedDb(url=url, build=build, public_before=before, public_after=after)
+    finally:
+        _drop_database(admin_url, name)
