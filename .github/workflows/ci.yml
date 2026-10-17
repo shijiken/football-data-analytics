@@ -16,5 +16,7 @@ jobs:
       - run: scripts/check.sh
       - name: Build image
         run: docker build -t football-stats:ci .
+      - name: Build transform image
+        run: docker build --target transform -t football-stats-transform:ci .
       - name: Compose smoke test
         run: scripts/smoke_compose.sh

@@ -112,3 +112,46 @@ def test_models_use_no_volatile_functions() -> None:
             assert not _VOLATILE.search(path.read_text("utf-8")), path
     for path in (TRANSFORM / "tests").glob("*.sql"):
         assert ";" not in path.read_text("utf-8"), path
+
+
+def _profile_env_names() -> set[str]:
+    names: set[str] = set()
+    for key in ("host", "port", "user", "password", "dbname"):
+        match = _ENV_CALL.match(str(_profile_output()[key]))
+        assert match is not None
+        names.add(match.group(1))
+    return names
+
+
+def test_compose_transform_service_uses_env_only() -> None:
+    """The transform service is a profile service fed only by environment variables (FR-008)."""
+    service = _yaml(REPO_ROOT / "docker-compose.yml")["services"]["transform"]
+    assert service["build"]["target"] == "transform"
+    assert "transform" in service["profiles"]
+    assert "migrate" in service["depends_on"]
+    assert "ingest" not in service["depends_on"]
+    assert "env_file" not in service
+    environment: dict[str, str] = service["environment"]
+    assert set(environment) == _profile_env_names()
+    for name, value in environment.items():
+        text = str(value)
+        assert re.fullmatch(r"\$\{POSTGRES_[A-Z_]+\}|db|\d+", text), (name, text)
+    assert str(environment["DBT_ENV_SECRET_PG_PASSWORD"]).startswith("${")
+
+
+def test_transform_group_is_default_and_excluded_from_app_image() -> None:
+    """dbt stays out of the app image and polars out of the transform image (research.md R2)."""
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text("utf-8")
+    stages = re.findall(r"^FROM\s+\S+\s+AS\s+(\w+)\s*$", dockerfile, re.MULTILINE)
+    assert stages == ["base", "transform", "app"]
+    bodies = re.split(r"^FROM\s.*$", dockerfile, flags=re.MULTILINE)[1:]
+    by_stage = dict(zip(stages, bodies, strict=True))
+    assert "uv sync --frozen --only-group transform" in by_stage["transform"]
+    syncs = re.findall(r"^.*uv sync.*$", by_stage["app"], re.MULTILINE)
+    assert syncs
+    for line in syncs:
+        assert "--no-default-groups" in line, line
+        assert "--no-dev" not in line, line
+    env_example = (REPO_ROOT / ".env.example").read_text("utf-8")
+    defined = set(re.findall(r"^([A-Z_]+)=", env_example, re.MULTILINE))
+    assert _profile_env_names() <= defined
