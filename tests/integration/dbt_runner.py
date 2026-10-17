@@ -117,6 +117,7 @@ def run_dbt(
     target_path = Path(env["DBT_TARGET_PATH"])
     cwd = target_path.parent
     cwd.mkdir(parents=True, exist_ok=True)
+    Path(env.get("HOME", str(cwd))).mkdir(parents=True, exist_ok=True)
     command = [
         str(Path(sys.executable).with_name("dbt")),
         *args,
