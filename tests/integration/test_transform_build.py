@@ -19,7 +19,17 @@ from tests.stages import CONTRACT_STARTED_AT
 PROJECT = "football_analytics"
 
 #: The models the project must contain (data-model.md §2-§3). Extended per story.
-EXPECTED_MODELS: frozenset[str] = frozenset({"stg_leagues", "stg_teams", "stg_matches"})
+EXPECTED_MODELS: frozenset[str] = frozenset(
+    {
+        "stg_leagues",
+        "stg_teams",
+        "stg_matches",
+        "mart_team_form",
+        "mart_league_season_home_advantage",
+        "mart_league_season_goals",
+        "mart_team_ratings",
+    }
+)
 
 #: Model -> key column sets. A one-column key needs unique + not_null; a composite key needs
 #: unique_combination_of_columns + not_null on each column (data-model.md §2-§3).
@@ -27,6 +37,10 @@ EXPECTED_KEYS: dict[str, list[tuple[str, ...]]] = {
     "stg_leagues": [("league_code",)],
     "stg_teams": [("team_id",), ("team_key",)],
     "stg_matches": [("match_id",)],
+    "mart_team_form": [("match_id", "team_id")],
+    "mart_league_season_home_advantage": [("league_code", "season")],
+    "mart_league_season_goals": [("league_code", "season")],
+    "mart_team_ratings": [("team_id",)],
 }
 
 #: Model -> {column: (referenced model, referenced field)} (data-model.md §2-§3).
@@ -38,9 +52,15 @@ EXPECTED_FOREIGN_KEYS: dict[str, dict[str, tuple[str, str]]] = {
         "home_team_id": ("stg_teams", "team_id"),
         "away_team_id": ("stg_teams", "team_id"),
     },
+    "mart_team_form": {
+        "match_id": ("stg_matches", "match_id"),
+        "team_id": ("stg_teams", "team_id"),
+        "opponent_team_id": ("stg_teams", "team_id"),
+    },
+    "mart_league_season_home_advantage": {"league_code": ("stg_leagues", "league_code")},
+    "mart_league_season_goals": {"league_code": ("stg_leagues", "league_code")},
+    "mart_team_ratings": {"team_id": ("stg_teams", "team_id")},
 }
-
-STAGING_MODELS = ("stg_leagues", "stg_teams", "stg_matches")
 
 
 def _model_ids(statuses: dict[str, str]) -> set[str]:
@@ -207,9 +227,7 @@ def test_build_fails_and_names_failing_test(
     rerun = run_dbt(["build"], dbt_env(db_url, home, tmp_path / "dbt_rerun"))
     assert rerun.returncode == 0, rerun.stdout
     with psycopg.connect(db_url) as conn, psycopg.connect(transformed_db.url) as reference:
-        assert helpers.analytics_snapshot(conn, STAGING_MODELS) == helpers.analytics_snapshot(
-            reference, STAGING_MODELS
-        )
+        assert helpers.analytics_snapshot(conn) == helpers.analytics_snapshot(reference)
         assert helpers.public_state(conn) == p0
 
 
@@ -235,3 +253,104 @@ def test_build_succeeds_on_real_sample(db_url: str, tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout
     assert result.statuses()
     assert set(result.statuses().values()) <= {"success", "pass"}
+
+
+_INT = ("integer", 32, 0)
+_BIGINT = ("bigint", 64, 0)
+_TEXT = ("text", None, None)
+_DATE = ("date", None, None)
+_BOOL = ("boolean", None, None)
+_FLOAT = ("double precision", 53, None)
+_SHARE = ("numeric", 5, 4)
+_AVG = ("numeric", 6, 4)
+
+#: Mart -> ordered (column, (data_type, numeric_precision, numeric_scale)) - data-model.md §3.
+EXPECTED_MART_COLUMNS: dict[str, list[tuple[str, tuple[str, int | None, int | None]]]] = {
+    "mart_team_form": [
+        ("match_id", _BIGINT),
+        ("team_id", _INT),
+        ("opponent_team_id", _INT),
+        ("league_code", _TEXT),
+        ("season", _TEXT),
+        ("season_start_year", _INT),
+        ("match_date", _DATE),
+        ("is_home", _BOOL),
+        ("goals_for", _INT),
+        ("goals_against", _INT),
+        ("result", _TEXT),
+        ("points", _INT),
+        ("team_match_number", _BIGINT),
+        ("form_matches", _BIGINT),
+        ("form_points", _BIGINT),
+        ("form_goals_for", _BIGINT),
+        ("form_goals_against", _BIGINT),
+    ],
+    "mart_league_season_home_advantage": [
+        ("league_code", _TEXT),
+        ("season", _TEXT),
+        ("season_start_year", _INT),
+        ("matches_played", _BIGINT),
+        ("home_wins", _BIGINT),
+        ("draws", _BIGINT),
+        ("away_wins", _BIGINT),
+        ("home_win_share", _SHARE),
+        ("draw_share", _SHARE),
+        ("away_win_share", _SHARE),
+        ("avg_home_goals", _AVG),
+        ("avg_away_goals", _AVG),
+    ],
+    "mart_league_season_goals": [
+        ("league_code", _TEXT),
+        ("season", _TEXT),
+        ("season_start_year", _INT),
+        ("matches_played", _BIGINT),
+        ("total_goals", _BIGINT),
+        ("goals_per_match", _AVG),
+        ("over_2_5_matches", _BIGINT),
+        ("over_2_5_share", _SHARE),
+        ("btts_matches", _BIGINT),
+        ("btts_share", _SHARE),
+    ],
+    "mart_team_ratings": [
+        ("team_id", _INT),
+        ("team_key", _TEXT),
+        ("team_name", _TEXT),
+        ("rated_matches", _BIGINT),
+        ("latest_elo", _FLOAT),
+        ("latest_elo_date", _DATE),
+        ("peak_elo", _FLOAT),
+        ("peak_elo_date", _DATE),
+        ("lowest_elo", _FLOAT),
+        ("lowest_elo_date", _DATE),
+    ],
+}
+
+EXPECTED_PRIMARY_KEYS: dict[str, list[str]] = {
+    "mart_team_form": ["match_id", "team_id"],
+    "mart_league_season_home_advantage": ["league_code", "season"],
+    "mart_league_season_goals": ["league_code", "season"],
+    "mart_team_ratings": ["team_id"],
+}
+
+
+def test_mart_columns_match_contract(transformed_db: TransformedDb) -> None:
+    """Mart columns, types and primary keys equal data-model.md §3; contracts are enforced."""
+    nodes = {n["name"]: n for n in _manifest_nodes(transformed_db.build.manifest(), "model")}
+    with psycopg.connect(transformed_db.url) as conn:
+        for mart, expected in EXPECTED_MART_COLUMNS.items():
+            rows = conn.execute(
+                b"SELECT column_name, data_type, numeric_precision, numeric_scale "
+                b"FROM information_schema.columns WHERE table_schema = 'analytics_marts' "
+                b"AND table_name = %s ORDER BY ordinal_position",
+                (mart,),
+            ).fetchall()
+            assert [(r[0], (r[1], r[2], r[3])) for r in rows] == expected, mart
+            keys = conn.execute(
+                b"SELECT a.attname FROM pg_constraint k "
+                b"JOIN LATERAL unnest(k.conkey) WITH ORDINALITY AS u(attnum, ord) ON true "
+                b"JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = u.attnum "
+                b"WHERE k.contype = 'p' AND k.conrelid = %s::regclass ORDER BY u.ord",
+                (f"analytics_marts.{mart}",),
+            ).fetchall()
+            assert [k[0] for k in keys] == EXPECTED_PRIMARY_KEYS[mart], mart
+            assert nodes[mart]["config"]["contract"]["enforced"] is True, mart

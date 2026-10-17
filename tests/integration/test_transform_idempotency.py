@@ -9,7 +9,6 @@ import psycopg
 from tests.conftest import fixture_path
 from tests.integration import helpers
 from tests.integration.dbt_runner import dbt_env, run_dbt
-from tests.integration.test_transform_build import STAGING_MODELS
 from tests.stages import CONTRACT_STARTED_AT
 
 
@@ -25,14 +24,14 @@ def test_second_build_is_identical(db_url: str, tmp_path: Path) -> None:
     first = run_dbt(["build"], env)
     assert first.returncode == 0, first.stdout
     with psycopg.connect(db_url) as conn:
-        a1 = helpers.analytics_snapshot(conn, STAGING_MODELS)
+        a1 = helpers.analytics_snapshot(conn)
         c1 = helpers.analytics_catalog_snapshot(conn)
         p1 = helpers.public_state(conn)
 
     second = run_dbt(["build"], env)
     assert second.returncode == 0, second.stdout
     with psycopg.connect(db_url) as conn:
-        a2 = helpers.analytics_snapshot(conn, STAGING_MODELS)
+        a2 = helpers.analytics_snapshot(conn)
         c2 = helpers.analytics_catalog_snapshot(conn)
         p2 = helpers.public_state(conn)
 

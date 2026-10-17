@@ -1,0 +1,265 @@
+version: 2
+
+models:
+  - name: mart_team_form
+    description: >
+      One row per team per match with the team's form over its previous five matches.
+    config:
+      contract:
+        enforced: true
+    constraints:
+      - type: primary_key
+        columns: [match_id, team_id]
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [match_id, team_id]
+    columns:
+      - name: match_id
+        data_type: bigint
+        constraints:
+          - type: not_null
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_matches')
+                field: match_id
+      - name: team_id
+        data_type: integer
+        constraints:
+          - type: not_null
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_teams')
+                field: team_id
+      - name: opponent_team_id
+        data_type: integer
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_teams')
+                field: team_id
+      - name: league_code
+        data_type: text
+      - name: season
+        data_type: text
+      - name: season_start_year
+        data_type: integer
+      - name: match_date
+        data_type: date
+      - name: is_home
+        data_type: boolean
+      - name: goals_for
+        data_type: integer
+      - name: goals_against
+        data_type: integer
+      - name: result
+        data_type: text
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [W, D, L]
+      - name: points
+        data_type: integer
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [0, 1, 3]
+                quote: false
+      - name: team_match_number
+        data_type: bigint
+        data_tests:
+          - not_null
+      - name: form_matches
+        data_type: bigint
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [0, 1, 2, 3, 4, 5]
+                quote: false
+      - name: form_points
+        data_type: bigint
+      - name: form_goals_for
+        data_type: bigint
+      - name: form_goals_against
+        data_type: bigint
+
+  - name: mart_league_season_home_advantage
+    description: >
+      One row per league-season with outcome counts and shares and average goals per side.
+    config:
+      contract:
+        enforced: true
+    constraints:
+      - type: primary_key
+        columns: [league_code, season]
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [league_code, season]
+    columns:
+      - name: league_code
+        data_type: text
+        constraints:
+          - type: not_null
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_leagues')
+                field: league_code
+      - name: season
+        data_type: text
+        constraints:
+          - type: not_null
+        data_tests:
+          - not_null
+      - name: season_start_year
+        data_type: integer
+        data_tests:
+          - not_null
+      - name: matches_played
+        data_type: bigint
+        data_tests:
+          - not_null
+      - name: home_wins
+        data_type: bigint
+        data_tests:
+          - not_null
+      - name: draws
+        data_type: bigint
+        data_tests:
+          - not_null
+      - name: away_wins
+        data_type: bigint
+        data_tests:
+          - not_null
+      - name: home_win_share
+        data_type: numeric(5,4)
+        data_tests:
+          - not_null
+      - name: draw_share
+        data_type: numeric(5,4)
+        data_tests:
+          - not_null
+      - name: away_win_share
+        data_type: numeric(5,4)
+        data_tests:
+          - not_null
+      - name: avg_home_goals
+        data_type: numeric(6,4)
+        data_tests:
+          - not_null
+      - name: avg_away_goals
+        data_type: numeric(6,4)
+        data_tests:
+          - not_null
+
+  - name: mart_league_season_goals
+    description: >
+      One row per league-season with total goals and the over-2.5 and both-teams-score rates.
+    config:
+      contract:
+        enforced: true
+    constraints:
+      - type: primary_key
+        columns: [league_code, season]
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [league_code, season]
+    columns:
+      - name: league_code
+        data_type: text
+        constraints:
+          - type: not_null
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_leagues')
+                field: league_code
+      - name: season
+        data_type: text
+        constraints:
+          - type: not_null
+        data_tests:
+          - not_null
+      - name: season_start_year
+        data_type: integer
+        data_tests:
+          - not_null
+      - name: matches_played
+        data_type: bigint
+        data_tests:
+          - not_null
+      - name: total_goals
+        data_type: bigint
+        data_tests:
+          - not_null
+      - name: goals_per_match
+        data_type: numeric(6,4)
+        data_tests:
+          - not_null
+      - name: over_2_5_matches
+        data_type: bigint
+        data_tests:
+          - not_null
+      - name: over_2_5_share
+        data_type: numeric(5,4)
+        data_tests:
+          - not_null
+      - name: btts_matches
+        data_type: bigint
+        data_tests:
+          - not_null
+      - name: btts_share
+        data_type: numeric(5,4)
+        data_tests:
+          - not_null
+
+  - name: mart_team_ratings
+    description: >
+      One row per team with its latest, peak and lowest pre-match Elo and their dates.
+    config:
+      contract:
+        enforced: true
+    constraints:
+      - type: primary_key
+        columns: [team_id]
+    columns:
+      - name: team_id
+        data_type: integer
+        constraints:
+          - type: not_null
+        data_tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_teams')
+                field: team_id
+      - name: team_key
+        data_type: text
+      - name: team_name
+        data_type: text
+      - name: rated_matches
+        data_type: bigint
+        data_tests:
+          - not_null
+      - name: latest_elo
+        data_type: double precision
+      - name: latest_elo_date
+        data_type: date
+      - name: peak_elo
+        data_type: double precision
+      - name: peak_elo_date
+        data_type: date
+      - name: lowest_elo
+        data_type: double precision
+      - name: lowest_elo_date
+        data_type: date
