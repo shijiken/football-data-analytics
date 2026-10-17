@@ -4,9 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo "==> ruff format --check"
-uv run --frozen ruff format --check .
+uv run --frozen ruff format --no-cache --check .
 echo "==> ruff check"
-uv run --frozen ruff check .
+uv run --frozen ruff check --no-cache .
 echo "==> mypy"
 uv run --frozen mypy src tests
 echo "==> unit tests"

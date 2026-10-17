@@ -2,6 +2,7 @@ import random
 
 import polars as pl
 import pytest
+
 from football_stats.clean import canonical_team_names, display_name, team_key
 
 

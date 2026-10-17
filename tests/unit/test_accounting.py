@@ -1,9 +1,9 @@
 import polars as pl
 import pytest
-from football_stats.validate import Partition
 
 from football_stats.errors import AccountingError
 from football_stats.source_contract import ExclusionReason
+from football_stats.validate import Partition
 from tests.conftest import fixture_path
 from tests.stages import partition_file
 

@@ -1,6 +1,6 @@
 import polars as pl
-from football_stats.clean import build_batch
 
+from football_stats.clean import build_batch
 from football_stats.source_contract import COLUMN_SPECS, Parser
 from tests.conftest import fixture_path
 from tests.stages import partition_file
