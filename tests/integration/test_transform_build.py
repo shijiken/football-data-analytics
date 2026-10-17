@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import io
 import re
 import shutil
+import tarfile
 from pathlib import Path
 from typing import Any
 
 import psycopg
 import yaml
+from testcontainers.postgres import PostgresContainer
 
 from tests.conftest import fixture_path
 from tests.integration import helpers
@@ -354,3 +357,56 @@ def test_mart_columns_match_contract(transformed_db: TransformedDb) -> None:
             ).fetchall()
             assert [k[0] for k in keys] == EXPECTED_PRIMARY_KEYS[mart], mart
             assert nodes[mart]["config"]["contract"]["enforced"] is True, mart
+
+
+def test_team_form_has_lookup_index(transformed_db: TransformedDb) -> None:
+    """The dbt ``indexes`` config creates the team-form lookup index (FR-010)."""
+    with psycopg.connect(transformed_db.url) as conn:
+        rows = conn.execute(
+            b"SELECT pg_get_indexdef(i.indexrelid) FROM pg_index i "
+            b"WHERE i.indrelid = 'analytics_marts.mart_team_form'::regclass AND NOT i.indisprimary"
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][0].endswith("USING btree (team_id, match_date, match_id)")
+
+
+def _copy_into_container(container: PostgresContainer, source: Path, directory: str) -> None:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        archive.add(source, arcname=source.name)
+    buffer.seek(0)
+    assert container.get_wrapped_container().put_archive(directory, buffer.getvalue())
+
+
+def test_explain_script_leaves_catalog_unchanged(
+    transformed_db: TransformedDb, postgres_container: PostgresContainer
+) -> None:
+    """The measurement script runs, prints every labelled plan, and changes no catalog entry."""
+    script = TRANSFORM_DIR.parent / "scripts" / "explain_transforms.sql"
+    _copy_into_container(postgres_container, script, "/tmp")  # inside the container
+    with psycopg.connect(transformed_db.url) as conn:
+        analytics_before = helpers.analytics_catalog_snapshot(conn)
+        public_before = helpers.catalog_snapshot(conn)
+    database = transformed_db.url.rsplit("/", 1)[1]
+    exit_code, output = postgres_container.get_wrapped_container().exec_run(
+        [
+            "psql",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-U",
+            postgres_container.username,
+            "-d",
+            database,
+            "-f",
+            "/tmp/explain_transforms.sql",  # inside the container
+        ]
+    )
+    text = output.decode("utf-8")
+    assert exit_code == 0, text
+    for label in ("Q1", "Q2", "Q3", "Q4", "Q5", "Q6"):
+        assert f"{label}:" in text, label
+    variants = 2 + 2 + 2 + 1 + 2 + 2
+    assert text.count("Execution Time:") == 5 * variants
+    with psycopg.connect(transformed_db.url) as conn:
+        assert helpers.analytics_catalog_snapshot(conn) == analytics_before
+        assert helpers.catalog_snapshot(conn) == public_before

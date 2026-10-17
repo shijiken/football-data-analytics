@@ -1,6 +1,8 @@
 -- Team-match grain (two rows per loaded match) plus the form over the team's previous five
 -- matches. The frame ends one row before the current row, so the current match is never
--- included, and the (match_date, match_id) order is total (research.md R8).
+-- included, and the (match_date, match_id) order is total (research.md R8). The index serves the
+-- team-form lookup "latest N matches of a team" (research.md R14).
+{{ config(indexes=[{"columns": ["team_id", "match_date", "match_id"]}]) }}
 
 with matches as (
 
