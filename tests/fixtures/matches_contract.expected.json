@@ -1,0 +1,79 @@
+{
+  "1": "loaded",
+  "2": {
+    "reason": "contract_violation",
+    "detail": "ht_le_ft_home"
+  },
+  "3": {
+    "reason": "contract_violation",
+    "detail": "ht_le_ft_away"
+  },
+  "4": {
+    "reason": "contract_violation",
+    "detail": "ft_result_consistent"
+  },
+  "5": {
+    "reason": "contract_violation",
+    "detail": "ht_result_consistent"
+  },
+  "6": {
+    "reason": "contract_violation",
+    "detail": "sot_le_shots_home"
+  },
+  "7": {
+    "reason": "contract_violation",
+    "detail": "sot_le_shots_away"
+  },
+  "8": {
+    "reason": "contract_violation",
+    "detail": "odds_min"
+  },
+  "9": {
+    "reason": "contract_violation",
+    "detail": "odds_min"
+  },
+  "10": {
+    "reason": "contract_violation",
+    "detail": "max_odds_ge_avg"
+  },
+  "11": {
+    "reason": "contract_violation",
+    "detail": "date_in_range"
+  },
+  "12": {
+    "reason": "contract_violation",
+    "detail": "date_in_range"
+  },
+  "13": {
+    "reason": "contract_violation",
+    "detail": "ht_le_ft_home, ft_result_consistent"
+  },
+  "14": "loaded",
+  "15": "loaded",
+  "16": "loaded",
+  "17": {
+    "reason": "contract_violation",
+    "detail": "ft_result_consistent"
+  },
+  "18": "loaded",
+  "19": {
+    "reason": "duplicate",
+    "detail": "duplicate of source row 1"
+  },
+  "20": {
+    "reason": "contract_violation",
+    "detail": "sot_le_shots_away"
+  },
+  "21": {
+    "reason": "invalid_value",
+    "detail": "HomeShots"
+  },
+  "22": {
+    "reason": "contract_violation",
+    "detail": "sot_le_shots_home"
+  },
+  "23": {
+    "reason": "same_team",
+    "detail": "arsenal"
+  }
+}

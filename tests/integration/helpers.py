@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
+import datetime as dt
+import hashlib
+import json
+import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import psycopg
 from alembic import command
 from alembic.config import Config
+from psycopg.types.json import Jsonb
+
+from football_stats import clean, extract, validate
+from football_stats.data_contract import CURRENT_CONTRACT, PRE_CONTRACT
+from football_stats.source_contract import MATCH_KEY_COLUMNS, MATCH_STAGING_COLUMNS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -17,8 +28,9 @@ _SNAPSHOT_QUERIES: dict[str, str] = {
     "excluded_rows": "SELECT * FROM excluded_rows ORDER BY excluded_row_id",
     "ingest_runs": (
         "SELECT run_id, source_url, source_sha256, source_bytes, raw_path, rows_read, "
-        "rows_loaded, rows_excluded, excluded_by_reason, matches_inserted, matches_updated, "
-        "matches_unchanged FROM ingest_runs ORDER BY run_id"
+        "rows_loaded, rows_excluded, excluded_by_reason, contract_version, violations_by_rule, "
+        "matches_inserted, matches_updated, matches_unchanged, matches_removed, "
+        "excluded_rows_removed FROM ingest_runs ORDER BY run_id"
     ),
 }
 
@@ -85,3 +97,158 @@ def catalog_snapshot(conn: psycopg.Connection) -> dict[str, list[tuple[object, .
         name: [tuple(row) for row in conn.execute(query.encode()).fetchall()]
         for name, query in queries.items()
     }
+
+
+_CONTENT_QUERIES: dict[str, str] = {
+    "leagues": "SELECT league_code FROM leagues ORDER BY 1",
+    "teams": "SELECT team_key, name FROM teams ORDER BY team_key",
+    "matches": (
+        "SELECT (to_jsonb(m) - 'match_id' - 'home_team_id' - 'away_team_id') "
+        "|| jsonb_build_object('home_team_key', h.team_key, 'away_team_key', a.team_key) "
+        "FROM matches m JOIN teams h ON h.team_id = m.home_team_id "
+        "JOIN teams a ON a.team_id = m.away_team_id "
+        "ORDER BY m.league_code, m.match_date, h.team_key, a.team_key"
+    ),
+    "excluded_rows": (
+        "SELECT to_jsonb(e) - 'excluded_row_id' - 'run_id' FROM excluded_rows e "
+        "ORDER BY source_sha256, source_row_number"
+    ),
+}
+
+
+def content_snapshot(conn: psycopg.Connection) -> dict[str, list[object]]:
+    """Return table contents without surrogate ids or run links (research.md R12).
+
+    Two databases are "identical" for the data contract when these snapshots are equal.
+    ``ingest_runs`` is an append-only audit log and is not compared.
+    """
+    result: dict[str, list[object]] = {}
+    for table, query in _CONTENT_QUERIES.items():
+        rows = conn.execute(query.encode()).fetchall()
+        result[table] = [row[0] if len(row) == 1 else tuple(row) for row in rows]
+    return result
+
+
+_NON_KEY_COLUMNS = tuple(c for c in MATCH_STAGING_COLUMNS if c not in MATCH_KEY_COLUMNS)
+_MATCH_INSERT_COLUMNS = (
+    "league_code",
+    "match_date",
+    "home_team_id",
+    "away_team_id",
+    *_NON_KEY_COLUMNS,
+)
+
+
+def seed_pre_contract(database_url: str, source: Path, run_date: dt.date) -> str:
+    """Create the database state feature 001 would have loaded from ``source`` (research.md R13).
+
+    Migrates to ``0001_initial_schema`` and writes leagues, teams, matches, one 0001-shaped
+    ``ingest_runs`` row and the excluded rows with plain SQL in one transaction. The pure stages
+    run with ``PRE_CONTRACT``, so rows that violate the data contract are loaded as 001 did.
+
+    Returns:
+        The SHA-256 of ``source`` (the provenance stamped on the rows).
+    """
+    upgrade(database_url, "0001_initial_schema")
+    parsed = clean.add_team_keys(clean.parse_frame(extract.read_source(source)))
+    part = validate.partition(parsed, contract=PRE_CONTRACT, run_date=run_date)
+    sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    batch = clean.build_batch(part.accepted, sha)
+    by_reason = {k: v for k, v in part.counts_by_reason().items() if k != "contract_violation"}
+    insert_match = (
+        "INSERT INTO matches ("
+        + ", ".join(_MATCH_INSERT_COLUMNS)
+        + ") VALUES (%s, %s, (SELECT team_id FROM teams WHERE team_key = %s), "
+        "(SELECT team_id FROM teams WHERE team_key = %s)" + ", %s" * len(_NON_KEY_COLUMNS) + ")"
+    )
+    with psycopg.connect(database_url) as conn, conn.transaction():
+        for code in sorted(batch.leagues["league_code"]):
+            conn.execute("INSERT INTO leagues (league_code) VALUES (%s)", (code,))
+        for key, name in batch.teams.sort("team_key").iter_rows():
+            conn.execute("INSERT INTO teams (team_key, name) VALUES (%s, %s)", (key, name))
+        for row in batch.matches.sort("source_row_number").iter_rows(named=True):
+            values = [
+                row["league_code"],
+                row["match_date"],
+                row["home_team_key"],
+                row["away_team_key"],
+                *(row[c] for c in _NON_KEY_COLUMNS),
+            ]
+            conn.execute(insert_match.encode(), values)
+        run = conn.execute(
+            "INSERT INTO ingest_runs (started_at, finished_at, source_url, source_sha256, "
+            "source_bytes, raw_path, rows_read, rows_loaded, rows_excluded, excluded_by_reason, "
+            "matches_inserted, matches_updated, matches_unchanged) "
+            "VALUES (now(), now(), %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, 0) RETURNING run_id",
+            (
+                source.resolve().as_uri(),
+                sha,
+                source.stat().st_size,
+                str(source),
+                part.rows_read,
+                batch.matches.height,
+                part.excluded.height,
+                Jsonb(by_reason),
+                batch.matches.height,
+            ),
+        ).fetchone()
+        assert run is not None
+        for number, reason, detail, raw_record in part.excluded.iter_rows():
+            conn.execute(
+                "INSERT INTO excluded_rows (run_id, source_sha256, source_row_number, reason, "
+                "detail, raw_record) VALUES (%s, %s, %s, %s, %s, %s)",
+                (run[0], sha, number, reason, detail, Jsonb(raw_record)),
+            )
+    return sha
+
+
+def assert_contract_validates_read_only(db_url: str) -> None:
+    """Prove every loaded match satisfies every rule, leaving the catalog untouched (R8)."""
+    with psycopg.connect(db_url) as conn:
+        for rule_id in CURRENT_CONTRACT.rule_ids:
+            conn.execute(
+                f"ALTER TABLE matches VALIDATE CONSTRAINT matches_contract_{rule_id}".encode()
+            )
+        conn.rollback()
+        flags = conn.execute(
+            "SELECT convalidated FROM pg_constraint WHERE conrelid = 'matches'::regclass "
+            "AND conname LIKE 'matches_contract_%'"
+        ).fetchall()
+    assert flags == [(False,)] * len(CURRENT_CONTRACT.rule_ids)
+
+
+def load_expected(name: str) -> dict[str, object]:
+    """Read a fixture ``*.expected.json`` file (keys are 1-based source row numbers)."""
+    path = REPO_ROOT / "tests" / "fixtures" / name
+    document: dict[str, object] = json.loads(path.read_text("utf-8"))
+    return document
+
+
+class _ListHandler(logging.Handler):
+    """Collect formatted messages of every record it receives."""
+
+    def __init__(self) -> None:
+        super().__init__(logging.INFO)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
+@contextmanager
+def capture_messages() -> Iterator[list[str]]:
+    """Capture INFO+ messages of the ``football_stats`` loggers.
+
+    Used instead of ``caplog`` in tests that run Alembic in-process: ``migrations/env.py`` calls
+    ``logging.config.fileConfig``, which replaces the root handlers (including caplog's).
+    """
+    logger = logging.getLogger("football_stats")
+    handler = _ListHandler()
+    previous_level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    try:
+        yield handler.messages
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)

@@ -1,0 +1,40 @@
+{
+  "1": "loaded",
+  "2": "loaded",
+  "3": "loaded",
+  "4": "loaded",
+  "5": "loaded",
+  "6": "loaded",
+  "7": "loaded",
+  "8": "loaded",
+  "9": "loaded",
+  "10": "loaded",
+  "11": "loaded",
+  "12": "loaded",
+  "13": "loaded",
+  "14": "loaded",
+  "15": "loaded",
+  "16": "loaded",
+  "17": "loaded",
+  "18": {
+    "reason": "duplicate",
+    "detail": "duplicate of source row 17"
+  },
+  "19": {
+    "reason": "duplicate",
+    "detail": "duplicate of source row 1"
+  },
+  "20": {
+    "reason": "duplicate",
+    "detail": "duplicate of source row 1"
+  },
+  "21": {
+    "reason": "invalid_value",
+    "detail": "HomeShots"
+  },
+  "22": "loaded",
+  "23": {
+    "reason": "same_team",
+    "detail": "arsenal"
+  }
+}

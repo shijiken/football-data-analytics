@@ -19,3 +19,10 @@ matches_real_sample.csv
 All other files in this directory are synthetic: hand-designed rows that use the same 48-column
 header as the real file (matches_edge_cases.expected.json records the expected outcome of every
 row of matches_edge_cases.csv, keyed by 1-based source_row_number).
+
+matches_contract.csv (feature 002) is synthetic: 23 rows with the real 48-column header, one row per
+data-contract rule or edge case (valid boundaries, each rule violated alone, a two-rule row,
+precedence against the per-column checks, duplicates, an orphan league/team for the convergence
+tests). matches_contract.expected.json (contract version 1) and matches_contract.pre.expected.json
+(version 0, feature-001 rules only) record the expected outcome of every row, keyed by the 1-based
+source_row_number; each value is "loaded" or {"reason", "detail"}.

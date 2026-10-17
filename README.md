@@ -6,8 +6,9 @@ in a single transaction. Every input row ends up either in `matches` or in `excl
 reason it was excluded, and running the pipeline twice changes nothing.
 
 This is Phase 1 of a larger learning project (data engineering practice first, analysis second).
-The feature specification, plan and decisions live in
-[`specs/001-match-data-ingestion/`](specs/001-match-data-ingestion/).
+The feature specifications, plans and decisions live in
+[`specs/001-match-data-ingestion/`](specs/001-match-data-ingestion/) (ingestion) and
+[`specs/002-data-contract/`](specs/002-data-contract/) (data contract).
 
 ## Data source and attribution
 
@@ -29,16 +30,17 @@ unchanged rows, see `tests/fixtures/SOURCES.txt`.
         v
  clean.py     strict parsers, team-name normalization              (pure: DataFrame in/out)
  validate.py  one exclusion reason per row, fixed precedence       (pure)
+data_contract.py (pandera)  nine cross-field rules, versioned     (pure)
         |
         v
  load.py      ONE transaction: advisory lock, COPY into temp tables, INSERT ... ON CONFLICT
         |
         v
- PostgreSQL   leagues  teams  matches  excluded_rows  ingest_runs      (Alembic migration 0001)
+ PostgreSQL   leagues  teams  matches  excluded_rows  ingest_runs      (Alembic migrations 0001-0003)
 ```
 
-Modules: `errors`, `config`, `source_contract` (leaves) - `extract`, `clean`, `validate`, `load`
-(one per stage) - `pipeline` (orchestration) - `verify` (SC-004 spot check) - `cli`.
+Modules: `errors`, `config`, `source_contract` (leaves) - `extract`, `clean`, `validate`,
+`data_contract`, `load` (one per stage) - `pipeline` (orchestration) - `verify` (SC-004 spot check) - `cli`.
 
 ## Prerequisites
 
@@ -61,9 +63,15 @@ behind a Compose profile so it never re-downloads 45 MB by accident. The command
 report on stdout (logs go to stderr):
 
 ```json
-{"status": "succeeded", "run_id": 1, "rows_read": 238859, "rows_loaded": 238854,
- "rows_excluded": 5, "excluded_by_reason": {"missing_field": 1, "missing_result": 4, "...": 0}, "...": "..."}
+{"status": "succeeded", "run_id": 1, "contract_version": 1, "rows_read": 238859,
+ "rows_loaded": 237473, "rows_excluded": 1386,
+ "excluded_by_reason": {"missing_field": 1, "missing_result": 4, "contract_violation": 1381, "...": 0},
+ "violations_by_rule": {"max_odds_ge_avg": 1357, "...": 0}, "matches_inserted": 237473, "...": "..."}
 ```
+
+After pulling a new version, rebuild first, otherwise an old image runs against the new schema:
+`docker compose --profile ingest build` (or `docker compose run --rm --build ingest`). `migrate`
+and `ingest` share one image tag (`football-stats:local`), so they cannot diverge.
 
 Other useful commands:
 
@@ -74,7 +82,9 @@ docker compose down -v                                                        # 
 ```
 
 Exit codes, environment variables and report schemas:
-[`contracts/cli.md`](specs/001-match-data-ingestion/contracts/cli.md). The manual acceptance run
+[`contracts/cli.md`](specs/001-match-data-ingestion/contracts/cli.md), with the data-contract
+additions (new report fields, exit codes 9 and 10) in
+[`specs/002-data-contract/contracts/cli.md`](specs/002-data-contract/contracts/cli.md). The manual acceptance run
 is [`quickstart.md`](specs/001-match-data-ingestion/quickstart.md).
 
 ## Quality gate
@@ -104,16 +114,55 @@ Full reasoning, with rejected alternatives, is in
 | Everything is read as text, then parsed explicitly (R3, R4) | Nothing is coerced silently; polars pads short rows, so a stdlib-csv structure check guards the field counts | One extra pass over the file (about a second) |
 | One reason per excluded row, fixed precedence (R6) | Counts add up to `rows_excluded`, outcome is deterministic | The `detail` column names every failing field |
 | No season column (R15) | Season boundaries differ per league; deriving them wrongly would be silent bad data | Queries use a `match_date` range; seasons belong in Phase 3 marts |
+| pandera evaluates the contract as vectorized DataFrame-level checks (002 R2) | One declarative schema object; `validate(lazy=True)` returns every failing row of every rule in one pass (0.5 s worst case on 240k rows) | A 0.x dependency, so it is pinned `<0.35` and its behaviour is pinned by a test |
+| Contract CHECK constraints added `NOT VALID`, parity proven rule by rule (002 R8) | The database rejects new or updated violators, and the upgrade still works on a database that already holds some | Old rows are not scanned; they are removed when their source file is re-ingested |
+| Re-running the same file converges (002 R10) | An upgraded database becomes identical to a fresh build, in one transaction | Matches of other source files are never touched |
+| Orphan teams and leagues are deleted (002 R11) | Otherwise an upgraded database differs from a fresh build | A global rule ("no match references it"), not file-scoped |
+| "Identical" means content without surrogate ids (002 R12) | Identity values are never reused, so ids cannot match after deletes | `ingest_runs` is an audit log and is not compared |
 | psycopg + hand-written SQL, no ORM (R9) | Set-based COPY and upserts are the point of the exercise | SQL strings live in `load.py` |
+
+## Data contract
+
+Contract version 1 ([`specs/002-data-contract/`](specs/002-data-contract/),
+[`contracts/data-contract.md`](specs/002-data-contract/contracts/data-contract.md)) adds nine
+cross-field rules on top of the per-column checks. A row that passed those checks but breaks a rule
+is excluded with reason `contract_violation`; its `detail` lists every violated rule id. The
+reasons now have seven values, in this precedence: `missing_field`, `invalid_date`,
+`missing_result`, `invalid_value`, `same_team`, `contract_violation`, `duplicate`. A rule is
+skipped when one of its inputs is missing, so sparse optional columns never cause exclusions.
+
+| Rule id | What must hold |
+|---|---|
+| `ht_le_ft_home` | half-time home goals do not exceed full-time home goals |
+| `ht_le_ft_away` | half-time away goals do not exceed full-time away goals |
+| `ft_result_consistent` | the full-time result matches the full-time score |
+| `ht_result_consistent` | the half-time result matches the half-time score |
+| `sot_le_shots_home` | home shots on target do not exceed home shots |
+| `sot_le_shots_away` | away shots on target do not exceed away shots |
+| `odds_min` | every pre-match decimal odd (average and maximum) is at least 1.0 |
+| `max_odds_ge_avg` | each maximum odd is at least the corresponding average odd |
+| `date_in_range` | the match date is between 2000-01-01 and the run date (UTC) |
+
+Every run records the contract version and the violations per rule in `ingest_runs` and in the JSON
+report. The database enforces the same nine rules with `matches_contract_<rule id>` CHECK
+constraints (added `NOT VALID`, so the upgrade works on a database that already contains violating
+matches). Re-running `ingest` on the same file removes that file's matches that no longer pass, so
+the database converges to what a fresh run would build. If a persistent validation of the
+constraints is ever wanted it ships as a new Alembic revision; the tests only run
+`VALIDATE CONSTRAINT` inside a rolled-back transaction, as a read-only proof.
+
+Changing a rule means: bump `CONTRACT_VERSION`, add the matching Alembic revision, update this
+table and add cases to `tests/contract_cases.py` (the gate fails otherwise).
 
 ## Known data quirks
 
-Stored as-is in this feature (domain rules are deferred to a later phase):
+Stored as-is by feature 001 (the data contract, below, now excludes the odds problems):
 
 - `King\u0092s Lynn` contains a C1 control character (U+0092) instead of an apostrophe, and is
   the club's only spelling in the file (87 rows). Repairing it would be name mapping, which is
   out of scope.
-- 8 odds values are `0.0`.
+- 8 odds values are `0.0`. Since contract version 1 these rows are excluded (`odds_min`), as are
+  rows whose maximum odd is below the average odd (`max_odds_ge_avg`).
 - 2 `HandiSize` values are `-99.9`.
 - The file has a blank line at file line 230,559. It is counted as a record and excluded as
   `missing_field` (it is one of the 5 excluded rows).
@@ -146,3 +195,39 @@ tests/                unit/, integration/, fixtures/
 scripts/              check.sh (gate), smoke_compose.sh
 specs/                spec, plan, research, data model, contracts, tasks, decisions, reviews
 ```
+
+## Measured numbers - data contract
+
+Recorded by task T036, which ran [`quickstart.md`](specs/002-data-contract/quickstart.md) against
+the real pinned dataset (sha256 `ef224cf2...4221`, re-downloaded and re-verified by each run).
+
+| Item | Value |
+|---|---|
+| Run date (UTC) / contract version | 2026-10-15 / 1 |
+| Rows read / loaded / excluded | 238,859 / 237,473 / 1,386 (`missing_field` 1, `missing_result` 4, `contract_violation` 1,381) |
+| Leagues / teams | 38 / 1,221 |
+| Machine (CPU / RAM / Docker) | Apple M3 / 16 GB / Docker Engine 29.8.2 (Docker Desktop) |
+| SC-005 fresh full run (target under 5 min): wall time / `duration_seconds` | 17.1 s / 14.4 s (`time docker compose run --rm ingest` on an empty database: download, hash, clean, validate, load) |
+| Converging re-run of the feature-001 database (238,854 matches): `matches_removed` | 1,381 (wall time 13.1 s, `duration_seconds` 10.5 s); 237,473 matches unchanged |
+| Re-run of the converged database | 0 inserted, 0 updated, 0 removed, 237,473 unchanged (9.3 s) |
+
+Violations per rule (rows read: 238,859):
+
+| Rule id | Rows violating | Share of rows read |
+|---|---:|---:|
+| `ht_le_ft_home` | 0 | 0 % |
+| `ht_le_ft_away` | 0 | 0 % |
+| `ft_result_consistent` | 0 | 0 % |
+| `ht_result_consistent` | 0 | 0 % |
+| `sot_le_shots_home` | 7 | 0.0029 % |
+| `sot_le_shots_away` | 13 | 0.0054 % |
+| `odds_min` | 8 | 0.0033 % |
+| `max_odds_ge_avg` | 1,357 | 0.5681 % |
+| `date_in_range` | 0 | 0 % |
+| rows with at least one violation | 1,381 (4 rows break two rules) | 0.5782 % |
+
+No rule exceeds the 1 % review threshold; the largest, `max_odds_ge_avg`, is discussed in
+[`decisions.md`](specs/002-data-contract/decisions.md) ("FR-011 real-data review"). The numbers equal
+the planning profile of `research.md` R16 exactly. The nine constraints were also proven against the
+whole converged table with `VALIDATE CONSTRAINT` inside a rolled-back transaction (all succeeded,
+catalog unchanged), and `verify --sample 20 --seed 42` reports no differences.

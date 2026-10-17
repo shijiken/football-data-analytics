@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import itertools
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -154,3 +154,18 @@ def settings(db_url: str, tmp_path: Path) -> Settings:
         raw_data_dir=tmp_path / "raw",
         log_level="DEBUG",
     )
+
+
+@pytest.fixture
+def make_settings(tmp_path: Path) -> Callable[[str], Settings]:
+    """Return a factory building test ``Settings`` for any database URL (raw files in tmp_path)."""
+
+    def _make(database_url: str) -> Settings:
+        return Settings(
+            database_url=database_url,
+            source_url="file:///nonexistent/override-in-test.csv",
+            raw_data_dir=tmp_path / "raw",
+            log_level="DEBUG",
+        )
+
+    return _make

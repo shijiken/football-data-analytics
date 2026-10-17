@@ -7,19 +7,26 @@ from football_stats import pipeline
 from football_stats.config import Settings
 from tests.conftest import fixture_path
 from tests.integration import helpers
+from tests.stages import CONTRACT_STARTED_AT
 
 
 @pytest.mark.parametrize(
-    "name", ["matches_valid.csv", "matches_edge_cases.csv", "matches_real_sample.csv"]
+    "name",
+    [
+        "matches_valid.csv",
+        "matches_edge_cases.csv",
+        "matches_real_sample.csv",
+        "matches_contract.csv",
+    ],
 )
 def test_second_run_leaves_identical_state(
     name: str, settings: Settings, db_conn: psycopg.Connection
 ) -> None:
     source = fixture_path(name)
-    pipeline.run(settings, source_file=source)
+    pipeline.run(settings, source_file=source, started_at=CONTRACT_STARTED_AT)
     first = helpers.snapshot(db_conn)
     db_conn.commit()
-    pipeline.run(settings, source_file=source)
+    pipeline.run(settings, source_file=source, started_at=CONTRACT_STARTED_AT)
     second = helpers.snapshot(db_conn)
 
     for table in ("leagues", "teams", "matches", "excluded_rows"):
@@ -28,8 +35,8 @@ def test_second_run_leaves_identical_state(
     # Same source and the same read/loaded/excluded counts in both runs; only run_id and the
     # inserted/updated/unchanged split differ (the second run changes nothing).
     run_one, run_two = second["ingest_runs"]
-    assert run_one[1:9] == run_two[1:9]
-    assert run_two[9:] == (0, 0, run_two[6])
+    assert run_one[1:11] == run_two[1:11]
+    assert run_two[11:] == (0, 0, run_two[6], 0, 0)
     assert second["ingest_runs"][0] == first["ingest_runs"][0]
 
 
@@ -58,6 +65,9 @@ def test_changed_source_updates_match_in_place(
     fields = lines[1].split(",")
     assert fields[11:14] == ["2.0", "1.0", "H"]
     fields[11:14] = ["0.0", "3.0", "A"]
+    # Half-time must stay consistent with the new full-time score (data contract, 002 R17).
+    assert fields[14:17] == ["1.0", "0.0", "H"]
+    fields[14:17] = ["0.0", "1.0", "A"]
     lines[1] = ",".join(fields)
     changed = tmp_path / "changed.csv"
     changed.write_text("\n".join(lines) + "\n", encoding="utf-8")

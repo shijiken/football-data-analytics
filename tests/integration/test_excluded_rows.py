@@ -8,6 +8,7 @@ import pytest
 from football_stats import pipeline
 from football_stats.config import Settings
 from tests.conftest import fixture_path
+from tests.stages import CONTRACT_STARTED_AT
 
 
 def source_records(name: str) -> list[dict[str, str | None]]:
@@ -65,11 +66,13 @@ def test_duplicate_detail_points_to_kept_row(
         assert int(match.group(1)) in kept
 
 
-@pytest.mark.parametrize("name", ["matches_edge_cases.csv", "matches_real_sample.csv"])
+@pytest.mark.parametrize(
+    "name", ["matches_edge_cases.csv", "matches_real_sample.csv", "matches_contract.csv"]
+)
 def test_db_reconciles_with_run_counts(
     name: str, settings: Settings, db_conn: psycopg.Connection
 ) -> None:
-    report = pipeline.run(settings, source_file=fixture_path(name))
+    report = pipeline.run(settings, source_file=fixture_path(name), started_at=CONTRACT_STARTED_AT)
     loaded = db_conn.execute(
         "SELECT count(*) FROM matches WHERE source_sha256 = %s", (report.source_sha256,)
     ).fetchone()

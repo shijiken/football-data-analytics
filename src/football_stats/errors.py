@@ -75,3 +75,21 @@ class AccountingError(FootballStatsError):
 
     exit_code = 8
     error = "accounting_error"
+
+
+class ContractSchemaError(FootballStatsError):
+    """The frame handed to the data contract does not match its declared columns or dtypes.
+
+    A programming error (parser/contract mismatch), never bad data: it is not turned into
+    exclusions.
+    """
+
+    exit_code = 9
+    error = "contract_schema_error"
+
+
+class ClockSkewError(FootballStatsError):
+    """The database's UTC date is earlier than the run date (application/database clocks differ)."""
+
+    exit_code = 10
+    error = "clock_skew"

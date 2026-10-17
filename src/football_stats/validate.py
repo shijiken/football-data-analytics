@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import polars as pl
 
+from football_stats.data_contract import DataContract, find_violations
 from football_stats.errors import AccountingError, MalformedSourceError, MissingColumnsError
 from football_stats.source_contract import (
     COLUMN_SPECS,
@@ -47,11 +49,19 @@ class Partition:
     """Accepted and excluded rows of one source file.
 
     ``excluded`` has ``source_row_number``, ``reason``, ``detail`` and ``raw_record``.
+    ``violations`` is the long ``(source_row_number, rule_id)`` frame of the data contract and
+    ``rule_ids`` the contract's rule ids in contract order.
     """
 
     accepted: pl.DataFrame
     excluded: pl.DataFrame
     rows_read: int
+    violations: pl.DataFrame = field(
+        default_factory=lambda: pl.DataFrame(
+            schema={"source_row_number": pl.UInt32, "rule_id": pl.String}
+        )
+    )
+    rule_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Fail loudly if any row is unaccounted for (never ``assert``: ``-O`` strips it)."""
@@ -61,12 +71,32 @@ class Partition:
                 f"rows_read={self.rows_read} but accepted+excluded={total}; "
                 "refusing to load with unaccounted rows"
             )
+        unknown = set(self.violations["rule_id"]) - set(self.rule_ids)
+        if unknown:
+            raise AccountingError(f"violations name unknown rules: {sorted(unknown)}")
+        excluded_rows = set(
+            self.excluded.filter(pl.col("reason") == ExclusionReason.CONTRACT_VIOLATION.value)[
+                "source_row_number"
+            ]
+        )
+        if excluded_rows != set(self.violations["source_row_number"]):
+            raise AccountingError(
+                "contract_violation exclusions and violations disagree; "
+                "refusing to report wrong per-rule counts"
+            )
 
     def counts_by_reason(self) -> dict[str, int]:
         """Return the exclusion count for every reason (zeros included)."""
         counts = dict.fromkeys((reason.value for reason in ExclusionReason), 0)
         for reason, n in self.excluded.group_by("reason").len().iter_rows():
             counts[reason] = n
+        return counts
+
+    def violations_by_rule(self) -> dict[str, int]:
+        """Return the number of rows violating each rule (zeros included, contract order)."""
+        counts = dict.fromkeys(self.rule_ids, 0)
+        for rule_id, n in self.violations.group_by("rule_id").len().iter_rows():
+            counts[rule_id] = n
         return counts
 
 
@@ -81,12 +111,22 @@ def _names_where(specs: list[ColumnSpec], condition: str) -> pl.Expr:
     return pl.concat_list(parts).list.drop_nulls().list.join(", ")
 
 
-def partition(parsed: pl.DataFrame) -> Partition:
+def partition(parsed: pl.DataFrame, *, contract: DataContract, run_date: dt.date) -> Partition:
     """Split parsed rows into accepted and excluded (one reason per excluded row).
 
-    Rules run in a fixed order (research.md R6): ``missing_field``, ``invalid_date``,
-    ``missing_result``, ``invalid_value``, ``same_team``, then ``duplicate`` among the rows
-    that passed all earlier rules, keeping the lowest ``source_row_number``.
+    Rules run in a fixed order (001 research.md R6, 002 research.md R4): ``missing_field``,
+    ``invalid_date``, ``missing_result``, ``invalid_value``, ``same_team``, then
+    ``contract_violation`` among the rows that passed all earlier rules (``detail`` lists every
+    violated rule id in contract order), then ``duplicate`` among the rows that passed all
+    earlier rules, keeping the lowest ``source_row_number``.
+
+    Args:
+        parsed: Output of the parse and team-key stages.
+        contract: The data contract to enforce (``PRE_CONTRACT`` enforces nothing).
+        run_date: UTC date the run started (upper bound of ``date_in_range``).
+
+    Raises:
+        ContractSchemaError: If the contract cannot be evaluated on ``parsed``.
     """
     key_specs = [s for s in COLUMN_SPECS if s.kind is ColumnKind.KEY]
     result_specs = [s for s in COLUMN_SPECS if s.kind is ColumnKind.REQUIRED]
@@ -121,6 +161,29 @@ def partition(parsed: pl.DataFrame) -> Partition:
     )
     checked = checked.with_columns(reason.alias("reason"), detail.alias("detail"))
 
+    # Contract rules see only rows that passed reasons 1-5, and run before duplicate detection:
+    # a broken first copy must not hide a valid later copy of the same match.
+    passed_column_checks = checked.filter(pl.col("reason").is_null())
+    violations = find_violations(passed_column_checks, contract, run_date)
+    violated = (
+        violations.group_by("source_row_number", maintain_order=True)
+        .agg(pl.col("rule_id").str.join(", ").alias("_violated"))
+        .lazy()
+    )
+    checked = (
+        checked.lazy()
+        .join(violated, on="source_row_number", how="left")
+        .with_columns(
+            pl.when(pl.col("_violated").is_not_null())
+            .then(pl.lit(ExclusionReason.CONTRACT_VIOLATION.value))
+            .otherwise(pl.col("reason"))
+            .alias("reason"),
+            pl.coalesce(pl.col("_violated"), pl.col("detail")).alias("detail"),
+        )
+        .drop("_violated")
+        .collect()
+    )
+
     candidates = checked.filter(pl.col("reason").is_null()).with_columns(
         pl.col("source_row_number").min().over(_DUPLICATE_KEY).alias("_first_row")
     )
@@ -138,4 +201,10 @@ def partition(parsed: pl.DataFrame) -> Partition:
         ]
     ).sort("source_row_number")
     helper = ["_missing_key", "_missing_result", "_invalid_value", "reason", "detail", "_first_row"]
-    return Partition(accepted=accepted.drop(helper), excluded=excluded, rows_read=parsed.height)
+    return Partition(
+        accepted=accepted.drop(helper),
+        excluded=excluded,
+        rows_read=parsed.height,
+        violations=violations,
+        rule_ids=contract.rule_ids,
+    )

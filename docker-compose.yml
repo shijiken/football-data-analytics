@@ -16,6 +16,7 @@ services:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
 
   migrate:
+    image: football-stats:local
     build: .
     command: ["alembic", "upgrade", "head"]
     environment:
@@ -26,6 +27,7 @@ services:
     restart: "no"
 
   ingest:
+    image: football-stats:local
     build: .
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}

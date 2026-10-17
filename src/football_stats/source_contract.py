@@ -33,13 +33,18 @@ class Parser(Enum):
 
 
 class ExclusionReason(StrEnum):
-    """Why a row was excluded, in rule-precedence order (research.md R6)."""
+    """Why a row was excluded, in rule-precedence order (001 research.md R6, 002 research.md R4).
+
+    ``CONTRACT_VIOLATION`` is evaluated on rows that passed the per-column checks and the
+    same-team check, and before duplicate detection.
+    """
 
     MISSING_FIELD = "missing_field"
     INVALID_DATE = "invalid_date"
     MISSING_RESULT = "missing_result"
     INVALID_VALUE = "invalid_value"
     SAME_TEAM = "same_team"
+    CONTRACT_VIOLATION = "contract_violation"
     DUPLICATE = "duplicate"
 
 
