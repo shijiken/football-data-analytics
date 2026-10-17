@@ -41,8 +41,17 @@ Optional (dbt's own): `DBT_TARGET_PATH`, `DBT_LOG_PATH`. Defaults are `transform
 | Code | Meaning | Test |
 |---|---|---|
 | 0 | every model built and every test passed | `test_build_succeeds_and_runs_every_node`, smoke test |
-| 1 | at least one model errored or test failed; stdout names it (`FAIL <n> <test_name>`), `run_results.json` has `status: "fail"` | `test_build_fails_and_names_failing_test` |
+| 1 | at least one model errored or test failed; stdout names it (`FAIL <n> <test_name>`), `run_results.json` has `status: "fail"`, downstream nodes `skipped` | `test_build_fails_and_names_failing_test` |
 | 2 | dbt could not run: missing or invalid profile variable, database unreachable | `test_build_without_credentials_exits_2` |
+
+### State after a non-zero exit (research.md R18)
+
+Models built before the failing node hold the new contents, including a mart whose own test
+failed. Skipped downstream models keep their previous contents, or are absent on a first build.
+**Treat `analytics_staging`/`analytics_marts` as not trustworthy after a non-zero exit until the
+next exit-0 run.** `public` is never changed. Recovery: rerun the same command once the cause is
+fixed. Every model is rebuilt in full from `public`, so the rerun converges to the state of a fresh
+build (tested by `test_build_fails_and_names_failing_test`).
 
 ## Outputs
 

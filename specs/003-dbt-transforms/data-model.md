@@ -157,18 +157,21 @@ Generic tests: `team_id` `unique` + `not_null` + `relationships → stg_teams.te
 
 ## 4. Singular tests (`transform/tests/*.sql`, research.md R10)
 
-A singular test returns the offending rows (0 rows = pass). Each one has a **mutation case** in
-`tests/integration/test_transform_invariants.py::MUTATIONS`. The corruption SQL runs on
+A singular test returns the offending rows (0 rows = pass). Each one has **at least one mutation
+case** in `tests/integration/test_transform_invariants.py::MUTATIONS` (9 cases for 6 tests). Singular
+test files contain no `;` (the harness wraps them as a subquery).
+Every singular test is also an independent check of the mart columns it covers on real data:
+per-side values, every share and every ratio are recomputed from staging (plan review P1-3). The corruption SQL runs on
 `transformed_db` inside a transaction. The test's compiled SQL must then return ≥ 1 row, and the
 transaction is rolled back.
 
 | Test | Invariant (independent formulation) | Mutation case (`id`: SQL) |
 |---|---|---|
-| `assert_team_form_two_rows_per_match` | every `stg_matches.match_id` has exactly one `is_home` and one `NOT is_home` row in `mart_team_form`, with `team_id`/`opponent_team_id` equal to the match's home/away ids; no `mart_team_form.match_id` is missing from staging (`FULL OUTER JOIN` on per-match aggregates) | `team_form_row_missing`: `DELETE FROM analytics_marts.mart_team_form WHERE (match_id, team_id) IN (SELECT match_id, team_id FROM analytics_marts.mart_team_form ORDER BY match_id, team_id LIMIT 1)` |
+| `assert_team_form_two_rows_per_match` | every `stg_matches.match_id` has exactly one `is_home` and one `NOT is_home` row in `mart_team_form`, with `team_id`/`opponent_team_id` equal to the match's home/away ids, and `goals_for`, `goals_against`, `result`, `points`, `league_code`, `season`, `match_date` equal to that side's values in `stg_matches` (home row: `home_goals`, `away_goals`, `home_result`, `home_points`; away row: the mirror); no `mart_team_form.match_id` is missing from staging (`FULL OUTER JOIN` on per-match aggregates) | `team_form_row_missing`: `DELETE FROM analytics_marts.mart_team_form WHERE (match_id, team_id) IN (SELECT match_id, team_id FROM analytics_marts.mart_team_form ORDER BY match_id, team_id LIMIT 1)`; `team_form_goals_swapped`: `UPDATE analytics_marts.mart_team_form SET goals_for = goals_against, goals_against = goals_for WHERE goals_for <> goals_against` |
 | `assert_team_form_matches_lag_recomputation` | with `w AS (PARTITION BY team_id ORDER BY match_date, match_id)`: `team_match_number = row_number() OVER w`; `form_matches = least(row_number() OVER w - 1, 5)`; each `form_*` sum `IS NOT DISTINCT FROM` `CASE WHEN row_number() OVER w = 1 THEN NULL ELSE coalesce(lag(x,1) OVER w,0)+…+coalesce(lag(x,5) OVER w,0) END` for `points`, `goals_for`, `goals_against` | `form_includes_current_match`: `UPDATE analytics_marts.mart_team_form SET form_points = form_points + points WHERE form_matches > 0 AND points > 0` |
 | `assert_home_advantage_shares_sum_to_one` | `abs(home_win_share + draw_share + away_win_share - 1) > 0.00015` returns rows (research.md R13) | `shares_do_not_sum_to_one`: `UPDATE analytics_marts.mart_league_season_home_advantage SET draw_share = draw_share + 0.01` |
-| `assert_home_advantage_reconciles_with_staging` | re-aggregate `stg_matches` per `(league_code, season)`; `FULL OUTER JOIN` the mart; any `IS DISTINCT FROM` on `matches_played`, `home_wins`, `draws`, `away_wins`, and `avg_home_goals` / `avg_away_goals` vs `round(sum(home_goals)::numeric / count(*), 4)` (same for away) recomputed from staging | `home_advantage_count_off`: `UPDATE analytics_marts.mart_league_season_home_advantage SET matches_played = matches_played + 1 WHERE (league_code, season) = (SELECT league_code, season FROM analytics_marts.mart_league_season_home_advantage ORDER BY 1, 2 LIMIT 1)` |
-| `assert_goals_reconcile_with_staging` | as above for `matches_played`, `total_goals` (= `sum(home_goals + away_goals)`), `over_2_5_matches`, `btts_matches` | `goals_total_off`: `UPDATE analytics_marts.mart_league_season_goals SET total_goals = total_goals + 1` |
+| `assert_home_advantage_reconciles_with_staging` | re-aggregate `stg_matches` per `(league_code, season)`; `FULL OUTER JOIN` the mart; any `IS DISTINCT FROM` on `matches_played`, `home_wins`, `draws`, `away_wins`, `home_win_share`, `draw_share`, `away_win_share` vs `round(<count>::numeric / count(*), 4)`, and `avg_home_goals` / `avg_away_goals` vs `round(sum(home_goals)::numeric / count(*), 4)` (same for away), all recomputed from staging | `home_advantage_count_off`: `UPDATE analytics_marts.mart_league_season_home_advantage SET matches_played = matches_played + 1 WHERE (league_code, season) = (SELECT league_code, season FROM analytics_marts.mart_league_season_home_advantage ORDER BY 1, 2 LIMIT 1)`; `home_away_shares_swapped`: `UPDATE analytics_marts.mart_league_season_home_advantage SET home_win_share = away_win_share, away_win_share = home_win_share WHERE home_win_share <> away_win_share` |
+| `assert_goals_reconcile_with_staging` | as above for `matches_played`, `total_goals` (= `sum(home_goals + away_goals)`), `over_2_5_matches`, `btts_matches`, and `goals_per_match`, `over_2_5_share`, `btts_share` vs `round(<count or sum>::numeric / count(*), 4)` recomputed from staging | `goals_total_off`: `UPDATE analytics_marts.mart_league_season_goals SET total_goals = total_goals + 1`; `btts_share_off`: `UPDATE analytics_marts.mart_league_season_goals SET btts_share = btts_share + 0.0001` |
 | `assert_team_ratings_reconcile_with_staging` | recompute from `stg_matches` (team perspective, Elo not null) with `DISTINCT ON (team_id) … ORDER BY team_id, <tie order>` for latest/peak/lowest and `count(*)` for `rated_matches`; `LEFT JOIN` from `stg_teams`; any `IS DISTINCT FROM` on the 7 value columns (this also checks that unrated teams are all null) | `peak_date_not_earliest`: `UPDATE analytics_marts.mart_team_ratings SET peak_elo_date = latest_elo_date WHERE team_key = 'arsenal'` (fixture: peak tie 2021-08-14 vs latest 2021-09-18) |
 
 The project-local generic test `tests/generic/unique_combination_of_columns.sql`
@@ -183,26 +186,31 @@ combination `GROUP BY … HAVING count(*) > 1`.
 - `@dataclass(frozen=True) class DbtResult`: `returncode: int`, `stdout: str`,
   `results: list[dict[str, object]]` (the `results` of `run_results.json`, or `[]` if the file is
   missing), `target_dir: Path`. Methods: `statuses() -> dict[str, str]` (unique_id → status);
-  `compiled_sql(test_name: str) -> str` (the `compiled_code` of the result whose unique_id starts
+  `compiled_sql(test_name: str) -> str` (the raw `compiled_code`; callers wrap it as
+  `f"SELECT count(*) FROM (\n{sql}\n) t"`, with newlines on both sides so a trailing `--` comment
+  cannot swallow the closing parenthesis. It is the `compiled_code` of the result whose unique_id starts
   with `test.football_analytics.<test_name>.` or equals `test.football_analytics.<test_name>`;
   `KeyError` if absent); `manifest() -> dict[str, object]` (reads `target_dir / "manifest.json"`).
 - `dbt_env(database_url: str, home: Path, target_dir: Path) -> dict[str, str]`: parses the libpq URL
   with `urllib.parse.urlsplit` (`unquote` user/password) into `DBT_PG_HOST`, `DBT_PG_PORT`,
   `DBT_PG_USER`, `DBT_ENV_SECRET_PG_PASSWORD`, `DBT_PG_DBNAME`, and adds `PATH` (from `os.environ`),
   `HOME=str(home)`, `DBT_TARGET_PATH=str(target_dir / "target")`,
-  `DBT_LOG_PATH=str(target_dir / "logs")`. Nothing else from `os.environ` is passed.
+  `DBT_LOG_PATH=str(target_dir / "logs")`, `DBT_SEND_ANONYMOUS_USAGE_STATS=false` (second guard
+  next to the project flag). Nothing else from `os.environ` is passed.
 - `run_dbt(args: Sequence[str], env: Mapping[str, str], *, project_dir: Path = TRANSFORM_DIR,
   timeout: float = 300) -> DbtResult`: runs
   `[str(Path(sys.executable).with_name("dbt")), *args, "--project-dir", str(project_dir),
   "--profiles-dir", str(project_dir)]` with `subprocess.run(..., env=dict(env), capture_output=True,
-  text=True, timeout=timeout, check=False)`. It returns `DbtResult` with stdout + stderr
+  text=True, timeout=timeout, check=False, cwd=target_dir)` (`target_dir` taken from
+  `env["DBT_TARGET_PATH"]`'s parent, created if missing), so dbt never runs in the repository. It returns `DbtResult` with stdout + stderr
   concatenated, and logs the command (without the password) at DEBUG.
 
 `tests/integration/helpers.py` (extended):
 
 - `ANALYTICS_MODELS: dict[str, str]`: model → `"<schema>.<name>"` for the 7 models.
 - `ANALYTICS_KEYS: dict[str, str]`: model → `ORDER BY` clause (§2, §3 keys).
-- `analytics_snapshot(conn) -> dict[str, list[object]]`: for each model,
+- `analytics_snapshot(conn, models: Sequence[str] = tuple(ANALYTICS_MODELS)) -> dict[str, list[object]]`:
+  for each model in the fixed list (default: all 7; US1 tests pass the 3 staging names),
   `SELECT to_jsonb(t) FROM <schema>.<name> t ORDER BY <key>`.
 - `analytics_catalog_snapshot(conn) -> dict[str, list[tuple[object, ...]]]`: like
   `catalog_snapshot` but for schemas `analytics_staging`/`analytics_marts`, with table types from
@@ -217,7 +225,7 @@ combination `GROUP BY … HAVING count(*) > 1`.
 `tests/integration/conftest.py` (extended): session fixture
 `transformed_db(admin_url, template_db, tmp_path_factory) -> Iterator[TransformedDb]`.
 `TransformedDb` is a frozen dataclass with `url`, `build: DbtResult`, `public_before`,
-`public_after` (each `(snapshot, catalog_snapshot)`). It clones the template, ingests
+`public_after` (each `(snapshot, catalog_snapshot, alembic_version rows)`; helper `helpers.public_state(conn)` returns this triple). It clones the template, ingests
 `matches_transform.csv` with `pipeline.run(Settings(...), source_file=..., started_at=
 CONTRACT_STARTED_AT)`, captures `public_before`, runs `dbt build`, captures `public_after`, yields,
 and drops the database. The fixture does **not** assert success. Tests do, so a failed build shows
@@ -225,8 +233,10 @@ up as named test failures and not as an error in setup.
 
 ## 6. Measurement script (`scripts/explain_transforms.sql`, research.md R14)
 
-A psql script (`psql -v ON_ERROR_STOP=1 -f`), read-only in effect. For each query below it runs
-`EXPLAIN (ANALYZE, BUFFERS)` 5 times, then reports the median from the 5 plans' "Execution Time".
+A psql script (`psql -v ON_ERROR_STOP=1 -f`), read-only in effect. Before each query it prints
+`\echo Qn: <label>`. Its header comment lists the variants per query: Q1 2, Q2 2, Q3 2, Q4 1, Q5 2,
+Q6 2, so 11 variants and 55 `Execution Time:` lines. It sets no planner overrides. For each variant
+it runs `EXPLAIN (ANALYZE, BUFFERS)` 5 times, then reports the median from the 5 plans' "Execution Time".
 The median is computed by the operator from the output; the script only prints the plans. "Before"
 plans for dbt-created indexes and keys run inside `BEGIN; DROP INDEX …` or
 `ALTER TABLE … DROP CONSTRAINT …; … ROLLBACK;`, with the names looked up at run time by

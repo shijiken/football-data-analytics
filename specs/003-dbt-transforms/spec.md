@@ -183,6 +183,9 @@ transform service, and confirm it succeeds; CI runs the same transform tests.
 
 - **User-mandated technology** (PLAN.md and the constitution): the transform layer is dbt with
   the PostgreSQL adapter; marts are materialized as tables, staging as views.
+- **Versioned structure changes (FR-010)**: for dbt-owned schemas, the dbt model definition
+  (including its `indexes` and contract constraints) is the versioned structure change; schema
+  changes in `public` remain Alembic migrations.
 - Elo ratings come from the source data's pre-match Elo columns; computing our own Elo is out of
   scope.
 - A single season rule (July cut-over) is acceptable for calendar-year leagues; their labels

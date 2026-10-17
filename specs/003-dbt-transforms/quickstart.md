@@ -42,13 +42,20 @@ SELECT count(*), count(*) FILTER (WHERE rated_matches > 0) FROM analytics_marts.
 SELECT matches_played, home_win_share, draw_share, away_win_share
   FROM analytics_marts.mart_league_season_home_advantage
  WHERE league_code = 'E0' AND season = '2015/16';                            -- 380 | 0.4132 | 0.2816 | 0.3053
-SELECT md5(string_agg(to_jsonb(t)::text, '' ORDER BY match_id, team_id))
-  FROM analytics_marts.mart_team_form t;                                     -- record it
+-- SC-004: one content hash per model (all 7), ordered by its key; record all 7 lines
+SELECT 'stg_leagues', md5(string_agg(to_jsonb(t)::text, '' ORDER BY league_code)) FROM analytics_staging.stg_leagues t
+UNION ALL SELECT 'stg_teams', md5(string_agg(to_jsonb(t)::text, '' ORDER BY team_id)) FROM analytics_staging.stg_teams t
+UNION ALL SELECT 'stg_matches', md5(string_agg(to_jsonb(t)::text, '' ORDER BY match_id)) FROM analytics_staging.stg_matches t
+UNION ALL SELECT 'mart_team_form', md5(string_agg(to_jsonb(t)::text, '' ORDER BY match_id, team_id)) FROM analytics_marts.mart_team_form t
+UNION ALL SELECT 'mart_league_season_home_advantage', md5(string_agg(to_jsonb(t)::text, '' ORDER BY league_code, season)) FROM analytics_marts.mart_league_season_home_advantage t
+UNION ALL SELECT 'mart_league_season_goals', md5(string_agg(to_jsonb(t)::text, '' ORDER BY league_code, season)) FROM analytics_marts.mart_league_season_goals t
+UNION ALL SELECT 'mart_team_ratings', md5(string_agg(to_jsonb(t)::text, '' ORDER BY team_id)) FROM analytics_marts.mart_team_ratings t;
 SQL
 ```
 
-Run the `md5` query after the first and after the second build. It must print the same value
-(SC-004 on real data; the automated proof is `test_second_build_is_identical`). Also confirm that
+Run the hash query after the first and after the second build. All 7 hashes must be the same both
+times (SC-004 on real data, 100 % of models; the automated proof is `test_second_build_is_identical`).
+T036 records that all 7 matched. Also confirm that
 `public` is untouched: `SELECT count(*) FROM matches` still prints 237473, and
 `SELECT version_num FROM alembic_version` prints `0003_contract_constraints`.
 
@@ -75,10 +82,14 @@ is not added (record it as a negative result). `(league_code, match_date)` is re
 
 ## 3. Failure is loud (US1-AS3) **(automated; optional manual look)**
 
-`test_build_fails_and_names_failing_test` adds a deliberately failing test to a copy of the project.
-To see it by hand, copy `transform/` to `/tmp`, add `data_tests: [unique]` to `points` in
-`models/marts/_marts.yml`, and run the host command with `--project-dir /tmp/transform
---profiles-dir /tmp/transform`. Expected: exit 1 and `FAIL … unique_mart_team_form_points`.
+`test_build_fails_and_names_failing_test` adds a deliberately failing test to a copy of the project,
+then shows that a rerun of the unmodified project on the same database recovers (research.md R18).
+To see it by hand: copy `transform/` to `/tmp/transform`; in `/tmp/transform/models/staging/_staging.yml`,
+under model `stg_matches`, column `home_points`, add `unique` to that column's existing `data_tests`
+list (edit the list; do not append a new `models:` entry, which is a parse error with exit 2). Run the
+host command with `--project-dir /tmp/transform --profiles-dir /tmp/transform`. Expected: exit 1,
+`FAIL … unique_stg_matches_home_points`, and the four marts reported as `SKIP`. Then run the normal
+host command: exit 0, and the marts are correct again.
 
 ## 4. CI (US4-AS2)
 

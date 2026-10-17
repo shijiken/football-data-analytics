@@ -50,7 +50,7 @@ subprocess, research.md R5). New fixture `tests/fixtures/matches_transform.csv` 
 **Project Type**: single Python project (CLI + library) plus a dbt project directory.
 
 **Performance Goals**: SC-001 full build < 2 min on real data (probe: 3.4 s of dbt time). The gate
-stays under about 60 s (baseline 24 s; 7 dbt invocations of about 3 s each). Team-form lookup
+stays under about 60 s (baseline 24 s; 8 dbt invocations of about 3 s each). Team-form lookup
 under 1 ms with the index (probe: 0.02 ms, from 7.5 ms).
 
 **Constraints**: no network in tests (no dbt packages, tracking off, never `dbt deps` or
@@ -73,7 +73,7 @@ No `NEEDS CLARIFICATION` items remain.
 | I. Counts reconcile and are logged | dbt logs every node's status and row count (`SELECT n`); `run_results.json` is kept as an artifact | `test_build_succeeds_and_runs_every_node` |
 | **II. Idempotent** | Full rebuild with atomic table swap; two builds give identical contents | `test_second_build_is_identical`; quickstart §1 on real data |
 | II. Raw kept unchanged; layers rebuildable | `public` is read-only for dbt (no hooks, only `source()` reads); staging → marts can be rebuilt any time | `test_public_tables_unchanged_by_build`, `test_manifest_has_no_hooks_and_only_analytics_schemas` |
-| II. Safe to retry | Each table is swapped in its own transaction; rerunning after a failure rebuilds everything | `test_build_fails_and_names_failing_test` followed by a passing build in `test_second_build_is_identical` (fresh DB) |
+| II. Safe to retry | Each model is a full rebuild from `public`, so a rerun on the database a failed build left behind converges to a fresh build. The intermediate state after exit 1 is documented as "not trustworthy until the next exit-0 run" (research.md R18, contracts/transform.md) | `test_build_fails_and_names_failing_test`: failing build (exit 1, downstream `skipped`), then the unmodified rerun on the **same** database gives exit 0, `analytics_snapshot` equals the session build's, and `public` is unchanged |
 | **III. Unit tests for transformation logic** | The logic is SQL. Its "unit" level is the exact fixture comparison per mart plus the singular invariants with mutation proofs. Python static checks are unit tests | `test_transform_marts.py`, `test_transform_invariants.py`, `tests/unit/test_transform_project.py` |
 | III. Integration tests on real PostgreSQL | Every dbt test runs against testcontainers PostgreSQL 17.6 | `tests/integration/test_transform_*.py` |
 | III. API tests | N/A (no API) | — |
@@ -82,14 +82,16 @@ No `NEEDS CLARIFICATION` items remain.
 | IV. Pinned versions | dbt pinned `<1.12` by range + lock hash; image from the same lock | `test_dbt_pinned_to_1_11` |
 | **V. Simple, incremental** | dbt is mandated (PLAN, constitution "Transforms"). No dbt packages, no wrapper code in `src/`, no migration, one index. Four story phases, each ending green | research.md R3, R5, R14 |
 | Tech: transforms in SQL, staging → marts | `models/staging` views → `models/marts` tables | `test_models_layered_staging_and_marts`, `test_models_live_in_analytics_schemas` |
-| Tech: versioned migrations, PKs/FKs/indexes | No `public` change. Mart PKs via contracts; FKs as `relationships` tests (dbt drops and recreates tables, so DB FKs to views are impossible); mart index via versioned dbt config | `test_team_form_has_lookup_index`, `test_upgrade_is_noop_at_head` (still `0003`) |
+| Tech: versioned migrations, PKs/FKs/indexes | No `public` change (Alembic head stays `0003`). Marts: PKs via enforced contracts; the lookup index via versioned dbt config (justified interpretation, Complexity Tracking row 1, spec Assumptions); no DB foreign keys, with `relationships` tests instead (justified deviation, Complexity Tracking row 2) | `test_team_form_has_lookup_index`, `test_mart_columns_match_contract`, `test_every_model_has_key_and_relationship_tests`, `test_upgrade_is_noop_at_head` (still `0003`) |
 | Quality: typed, docstrings, logging, no bare except | New Python is test code only (`dbt_runner.py`, helpers): typed under `mypy --strict`, docstrings, `logging` | gate steps 1–3 |
 | Quality: pure logic, one module per stage | No `src/` change | — |
 | Workflow: measured performance | SC-001 and every index measured on the full dataset, with negative results, recorded in the README | T036 (quickstart §1–2), `test_readme_documents_transform` |
 | Workflow: README current | New "Analytics transforms" section, architecture diagram updated | `test_readme_documents_transform` |
 
-**Result (pre-design)**: PASS. **Result (post-design re-check)**: PASS. The one justified
-deviation from "indexes via Alembic" (mart indexes in dbt config) is in Complexity Tracking.
+**Result (pre-design)**: PASS. **Result (post-design re-check)**: PASS, with two justified
+deviations or interpretations of "Schema design / migrations", both listed in Complexity Tracking:
+(1) indexes and keys of dbt-owned tables are defined in dbt model config; (2) marts have no database
+foreign keys.
 
 ## Deterministic Quality Gate
 
@@ -138,7 +140,7 @@ referenced by tasks.md. `[case]` = parametrized over `test_transform_invariants.
 | FR-004 | four marts exist with the documented columns and values | `integration/test_transform_build.py::test_mart_columns_match_contract`; `integration/test_transform_marts.py::test_team_form_matches_expected`, `::test_home_advantage_matches_expected`, `::test_goals_per_season_matches_expected`, `::test_team_ratings_matches_expected` |
 | FR-005 | window over strictly earlier matches, ≤ 5, date then `match_id` | `integration/test_transform_marts.py::test_first_match_has_empty_form`, `::test_same_date_matches_ordered_by_match_id`, `::test_form_window_capped_at_five_previous`, `::test_fixture_match_ids_follow_source_order`; `integration/test_transform_invariants.py::test_singular_test_detects_violation[form_includes_current_match]` |
 | FR-006 | key + relationship tests on every model; business-invariant tests on marts, each shown to detect its violation | `integration/test_transform_build.py::test_every_model_has_key_and_relationship_tests`; `integration/test_transform_invariants.py::test_singular_test_detects_violation[case]`, `::test_singular_tests_cover_every_file`, `::test_singular_tests_pass_on_fixture` |
-| FR-007 | two builds identical; `public` untouched | `integration/test_transform_idempotency.py::test_second_build_is_identical`; `integration/test_transform_build.py::test_public_tables_unchanged_by_build`, `::test_manifest_has_no_hooks_and_only_analytics_schemas` |
+| FR-007 | two builds identical; `public` (incl. `alembic_version`) untouched; rerun after a failed build converges | `integration/test_transform_idempotency.py::test_second_build_is_identical`; `integration/test_transform_build.py::test_build_fails_and_names_failing_test` (recovery part); `integration/test_transform_build.py::test_public_tables_unchanged_by_build`, `::test_manifest_has_no_hooks_and_only_analytics_schemas` |
 | FR-008 | one command, env-only config, compose service | `unit/test_transform_project.py::test_profile_reads_only_env_vars`, `::test_compose_transform_service_uses_env_only`, `::test_transform_group_is_default_and_excluded_from_app_image`; `integration/test_transform_build.py::test_build_without_credentials_exits_2`; `scripts/smoke_compose.sh` (CI) |
 | FR-009 | mart values = hand-calculated fixture, in the gate | the four `*_matches_expected` tests above + `::test_staging_derivations_match_expected` |
 | FR-010 | added index is versioned; no hand-made schema change; measured | `integration/test_transform_build.py::test_team_form_has_lookup_index`, `::test_explain_script_leaves_catalog_unchanged` (measurement procedure is read-only); `integration/test_migrations.py::test_upgrade_is_noop_at_head` (001/002, unchanged: still `0003`); `unit/test_readme_transform.py::test_readme_documents_transform` (every index has a README row); numbers: **manual** T036 |
@@ -149,7 +151,7 @@ referenced by tasks.md. `[case]` = parametrized over `test_transform_invariants.
 | SC-005 | each index has a measured before/after in the README | `unit/test_readme_transform.py::test_readme_documents_transform`; numbers **manual** T036 |
 | US1-AS1 | build creates models and all tests pass | `integration/test_transform_build.py::test_build_succeeds_and_runs_every_node` |
 | US1-AS2 | rerun identical | `integration/test_transform_idempotency.py::test_second_build_is_identical` |
-| US1-AS3 | failing test → non-zero exit, names the test | `integration/test_transform_build.py::test_build_fails_and_names_failing_test` |
+| US1-AS3 | failing test → non-zero exit, names the test, downstream skipped; same-DB rerun recovers | `integration/test_transform_build.py::test_build_fails_and_names_failing_test` |
 | US1-AS4 | ingestion tables unchanged | `integration/test_transform_build.py::test_public_tables_unchanged_by_build` |
 | US2-AS1 | form covers only earlier matches, ≤ 5, empty first | `::test_first_match_has_empty_form`, `::test_form_window_capped_at_five_previous`, `::test_team_form_matches_expected` |
 | US2-AS2 | shares sum to 100 % within rounding; count = loaded matches | `integration/test_transform_marts.py::test_shares_sum_to_one_within_rounding`, `::test_excluded_rows_never_reach_marts` |
@@ -364,11 +366,14 @@ README.md                        ~ architecture, transform section, measured num
 
 ## Complexity Tracking
 
-No constitution violations. Items a reviewer might question:
+Two justified constitution deviations or interpretations (Technical Constraints: "Schema changes MUST
+be made through versioned migrations"; "tables MUST declare primary keys, foreign keys, and
+appropriate indexes"), followed by other items a reviewer might question:
 
 | Item | Why needed | Simpler alternative rejected because |
 |---|---|---|
-| Mart indexes and keys come from dbt config, not Alembic | Marts are dropped and recreated by every build, so an Alembic index on them would vanish on the next run. The dbt config is versioned and applied by every build, never by hand (US3-AS2) | an Alembic migration cannot target tables it does not own; a post-hook `CREATE INDEX` is a hook (R4, R14) |
+| **Deviation 1 (interpretation)**: mart indexes and keys come from dbt model config, not Alembic | Marts are dropped and recreated by every build, so an Alembic index on them would vanish on the next run. The dbt model file is git-versioned and applied by every build, never by hand (US3-AS2). Recorded in spec.md Assumptions (plan review R-A): for dbt-owned schemas the dbt model definition is the versioned structure change; `public` stays Alembic-only | an Alembic migration cannot own tables it does not create, and would make Alembic depend on dbt having run; a post-hook `CREATE INDEX` is a hook (R4, R14) |
+| **Deviation 2**: marts declare no database foreign keys; `relationships` tests replace them | An FK from a mart to `public` (e.g. `mart_team_form.match_id → public.matches`) would make ingestion's own DML depend on analytics: 002's convergence `DELETE` of removed matches would fail, or with `ON DELETE CASCADE` reach into analytics. That breaks the ownership split (R4) and the spirit of FR-007. FKs *between* marts are blocked by dbt's per-table tmp-table swap: the referenced table is renamed and dropped during a rebuild, and dropping it would require dropping the dependent FK | FKs to `public`: couple ingestion to analytics; FKs between marts: incompatible with the swap materialization. The `relationships` tests check the same reference on every build (data-model.md §2–§3) |
 | dbt 1.11 rather than the latest 1.12 | 1.12 installs an un-hashed GitHub binary at build time (failed in the probe) | 1.12 breaks offline/locked builds (R1) |
 | Second Docker stage and image | Keeps dbt out of the app image and polars out of the transform image (430 MB vs about 680 MB combined); one lock for both | a single image carries both toolchains; a separate Dockerfile/lock could drift (R2) |
 | Model contracts on marts | The marts are the Phase 5 interface; a type or key drift fails the build in the container too | pytest-only type checks would not run on real data (R11) |

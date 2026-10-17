@@ -202,9 +202,10 @@ staging as tables (contradicts the spec's assumption and doubles storage for no 
   session build's `run_results.json`) in the same transaction, asserts that at least one row comes
   back, and rolls back. No extra dbt run is needed, and the shared database is unchanged afterwards.
 - Separate dbt runs only where a test needs its own state: idempotency (2 builds), empty database
-  (1), real sample (1), failing-test reporting (1), missing credentials (1, no database needed).
-  That makes **7 dbt invocations** in the suite. The expected added time is about 25 s, so the gate
-  should stay under 60 s. T037 measures it.
+  (1), real sample (1), failing build followed by a recovery build on the same database (2, R18),
+  missing credentials (1, no database needed). Together with the session build that makes **8 dbt
+  invocations** in the suite. The expected added time is about 28 s, so the gate should stay under
+  60 s. T037 measures it.
 
 **Rationale**: a subprocess runs exactly what the container and the README run. Its environment is
 explicit (no leakage from the developer's shell), its global state is isolated, and its exit code is
@@ -212,7 +213,7 @@ asserted directly (US1-AS3). `dbtRunner` in-process would share dbt's logging co
 `os.environ` with pytest (the profile reads `os.environ`, so tests would have to mutate it). It
 would also make mypy type-check dbt's internals. The mutation technique runs each SQL invariant
 twice: once on correct data (must pass, via the session build) and once on corrupted data (must
-fail). This proves the tests are not vacuous, at the cost of 6 transactions instead of 6 builds.
+fail). This proves the tests are not vacuous, at the cost of 9 rolled-back transactions instead of 9 builds.
 
 **Alternatives rejected**:
 - One fresh build per test: about 3 s each, so 20+ builds is over a minute.
@@ -403,7 +404,8 @@ value).
   and index/constraint definitions with the generated names stripped by regex), plus `public`
   (`helpers.snapshot` and `helpers.catalog_snapshot`) before, between and after.
 - **Untouched**: the session fixture captures `helpers.snapshot` + `helpers.catalog_snapshot`
-  (schema `public`) before and after its build; `test_public_tables_unchanged_by_build` asserts
+  (schema `public`) plus `alembic_version` contents before and after its build;
+  `test_public_tables_unchanged_by_build` asserts
   they are equal. A manifest check (R4) shows that no model, hook or operation targets `public`.
 
 **Rationale**: dbt's table materialization fully replaces each mart from the same deterministic
@@ -525,3 +527,42 @@ probe (`ft_result`, `away_result`, `away_points`, `season_start_year`), so the e
 is **75 nodes (7 models + 68 tests)**, as data-model.md §2–§4 specify. SC-001's target is under
 2 min. If T036 measures different numbers,
 it reports the difference and does not edit the expectation.
+
+## R18. State after a failed build, and retry (constitution II "safe to retry", plan review P1-1)
+
+**Facts**: in `dbt build`, each model's tests run *after* that model has been created. A table is
+swapped in atomically, then tested. When a test fails, dbt marks every node downstream of it
+`skipped` and exits 1. A model's own failure (SQL error, contract mismatch) leaves the previous
+table in place, because the swap is rolled back with the model's transaction.
+
+**Decision (documented, tested; no swap machinery)**:
+- **What exit 1 leaves behind**: every model built before the failing node holds the new contents,
+  including a mart whose own singular test failed: it stays published. Every skipped downstream
+  model keeps its previous contents, or does not exist on a first build. `analytics_marts` can then
+  mix tables from two runs. **Contract**: after a non-zero transform exit, consumers must treat the
+  analytics schemas as not trustworthy until the next exit-0 run (contracts/transform.md, README).
+  `public` is never affected. Phase 4 orchestration will gate consumers on the exit code.
+- **Retry**: every model is a full rebuild from `public` (no incremental state, no dependence on
+  previous analytics contents). A rerun on the same database therefore converges to exactly what a
+  fresh build produces. `test_build_fails_and_names_failing_test` proves it on one database:
+  1. failing build: exit 1, failing test named, downstream marts `skipped`;
+  2. unmodified rerun: exit 0;
+  3. `analytics_snapshot` equals the session build's, and `public` is unchanged.
+
+**Rationale**: the constitution requires that a run be *safe to retry after a partial failure*.
+It does not require atomic publication of all models. Retry safety holds by construction (full
+rebuilds from an untouched source) and is now shown on the same database. The only consumer of the
+marts before Phase 4 is the developer, who sees the exit code. The simplest honest stance is to
+state the intermediate state and make the rerun the documented recovery.
+
+**Alternatives rejected**:
+- `dbt build --fail-fast`: stops at the first failure, but the mart whose test failed is already
+  published, and more marts stay stale. It changes how much is stale, not whether the schema can be
+  trusted.
+- Build into a temporary schema and swap schemas only when every test passes (blue/green): needs
+  custom `generate_schema_name` logic plus `ALTER SCHEMA … RENAME` operations run from
+  `run-operation` or hooks outside dbt's materializations. That is new DDL code paths (R4 forbids
+  hooks), and with two renames there is a window in which neither schema exists. Phase 4 can gate
+  consumers more simply.
+- `dbt run` then `dbt test` with a manual "publish" step: the same problem as blue/green, plus two
+  commands instead of one (FR-008).
