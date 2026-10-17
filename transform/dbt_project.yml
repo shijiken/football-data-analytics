@@ -1,0 +1,24 @@
+name: football_analytics
+version: "1.0.0"
+config-version: 2
+profile: football_analytics
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+# Offline and deterministic (specs/003-dbt-transforms/research.md R6).
+flags:
+  send_anonymous_usage_stats: false
+  partial_parse: false
+  use_colors: false
+
+# With the profile schema `analytics`, +schema yields analytics_staging / analytics_marts.
+models:
+  football_analytics:
+    staging:
+      +materialized: view
+      +schema: staging
+    marts:
+      +materialized: table
+      +schema: marts

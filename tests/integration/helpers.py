@@ -6,16 +6,18 @@ import datetime as dt
 import hashlib
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 
 import psycopg
 from alembic import command
 from alembic.config import Config
+from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from football_stats import clean, extract, validate
+from football_stats import clean, extract, pipeline, validate
+from football_stats.config import Settings
 from football_stats.data_contract import CURRENT_CONTRACT, PRE_CONTRACT
 from football_stats.source_contract import MATCH_KEY_COLUMNS, MATCH_STAGING_COLUMNS
 
@@ -252,3 +254,144 @@ def capture_messages() -> Iterator[list[str]]:
     finally:
         logger.removeHandler(handler)
         logger.setLevel(previous_level)
+
+
+# --- analytics (dbt) helpers, feature 003 -------------------------------------------------------
+
+#: Model name -> ``schema.name`` for the 7 dbt models (data-model.md §2-§3).
+ANALYTICS_MODELS: dict[str, str] = {
+    "stg_leagues": "analytics_staging.stg_leagues",
+    "stg_teams": "analytics_staging.stg_teams",
+    "stg_matches": "analytics_staging.stg_matches",
+    "mart_team_form": "analytics_marts.mart_team_form",
+    "mart_league_season_home_advantage": "analytics_marts.mart_league_season_home_advantage",
+    "mart_league_season_goals": "analytics_marts.mart_league_season_goals",
+    "mart_team_ratings": "analytics_marts.mart_team_ratings",
+}
+
+#: Model name -> ``ORDER BY`` list (the model's key, data-model.md §2-§3).
+ANALYTICS_KEYS: dict[str, str] = {
+    "stg_leagues": "league_code",
+    "stg_teams": "team_id",
+    "stg_matches": "match_id",
+    "mart_team_form": "match_id, team_id",
+    "mart_league_season_home_advantage": "league_code, season",
+    "mart_league_season_goals": "league_code, season",
+    "mart_team_ratings": "team_id",
+}
+
+PublicState = tuple[
+    dict[str, list[tuple[object, ...]]],
+    dict[str, list[tuple[object, ...]]],
+    list[tuple[object, ...]],
+]
+
+
+def ingest_fixture(
+    database_url: str, raw_dir: Path, fixture: Path, started_at: dt.datetime
+) -> None:
+    """Ingest ``fixture`` into ``database_url`` with the real pipeline (raw copy in ``raw_dir``)."""
+    pipeline.run(
+        Settings(
+            database_url=database_url,
+            source_url="file:///nonexistent/override-in-test.csv",
+            raw_data_dir=raw_dir,
+            log_level="DEBUG",
+        ),
+        source_file=fixture,
+        started_at=started_at,
+    )
+
+
+def public_state(conn: psycopg.Connection) -> PublicState:
+    """Return ``public`` rows, ``public`` catalog and ``alembic_version`` rows (FR-007)."""
+    versions = [
+        tuple(row) for row in conn.execute(b"SELECT version_num FROM alembic_version").fetchall()
+    ]
+    return snapshot(conn), catalog_snapshot(conn), versions
+
+
+def analytics_snapshot(
+    conn: psycopg.Connection, models: Sequence[str] = tuple(ANALYTICS_MODELS)
+) -> dict[str, list[object]]:
+    """Return every row of the given models as JSON, ordered by each model's key."""
+    return {
+        model: [
+            row[0]
+            for row in conn.execute(
+                f"SELECT to_jsonb(t) FROM {ANALYTICS_MODELS[model]} t "
+                f"ORDER BY {ANALYTICS_KEYS[model]}".encode()
+            ).fetchall()
+        ]
+        for model in models
+    }
+
+
+def analytics_catalog_snapshot(conn: psycopg.Connection) -> dict[str, list[tuple[object, ...]]]:
+    """Return the catalog of the analytics schemas with generated names stripped (R11, R12)."""
+    schemas = "('analytics_staging', 'analytics_marts')"
+    queries = {
+        "tables": (
+            "SELECT table_schema, table_name, table_type FROM information_schema.tables "
+            f"WHERE table_schema IN {schemas} ORDER BY 1, 2"
+        ),
+        "columns": (
+            "SELECT table_schema, table_name, column_name, data_type, numeric_precision, "
+            "numeric_scale, is_nullable FROM information_schema.columns "
+            f"WHERE table_schema IN {schemas} ORDER BY table_schema, table_name, ordinal_position"
+        ),
+        "indexes": (
+            "SELECT tablename, regexp_replace(indexdef, 'INDEX \\S+ ON', 'INDEX ON') "
+            f"FROM pg_indexes WHERE schemaname IN {schemas} ORDER BY 1, 2"
+        ),
+        "constraints": (
+            "SELECT c.relname, k.contype, pg_get_constraintdef(k.oid) FROM pg_constraint k "
+            "JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
+            f"WHERE n.nspname IN {schemas} ORDER BY 1, 2, 3"
+        ),
+    }
+    return {
+        name: [tuple(row) for row in conn.execute(query.encode()).fetchall()]
+        for name, query in queries.items()
+    }
+
+
+_MART_ROW_QUERIES: dict[str, str] = {
+    "mart_team_form": (
+        "SELECT t.team_key, m.source_row_number, o.team_key AS opponent_team_key, f.league_code, "
+        "f.season, f.season_start_year, f.match_date::text AS match_date, f.is_home, "
+        "f.goals_for, f.goals_against, f.result, f.points, f.team_match_number, "
+        "f.form_matches, f.form_points, f.form_goals_for, f.form_goals_against "
+        "FROM analytics_marts.mart_team_form f JOIN teams t ON t.team_id = f.team_id "
+        "JOIN teams o ON o.team_id = f.opponent_team_id JOIN matches m ON m.match_id = f.match_id "
+        "ORDER BY t.team_key, f.match_date, m.source_row_number"
+    ),
+    "mart_league_season_home_advantage": (
+        "SELECT league_code, season, season_start_year, matches_played, home_wins, draws, "
+        "away_wins, home_win_share::text AS home_win_share, draw_share::text AS draw_share, "
+        "away_win_share::text AS away_win_share, avg_home_goals::text AS avg_home_goals, "
+        "avg_away_goals::text AS avg_away_goals "
+        "FROM analytics_marts.mart_league_season_home_advantage ORDER BY league_code, season"
+    ),
+    "mart_league_season_goals": (
+        "SELECT league_code, season, season_start_year, matches_played, total_goals, "
+        "goals_per_match::text AS goals_per_match, over_2_5_matches, "
+        "over_2_5_share::text AS over_2_5_share, btts_matches, btts_share::text AS btts_share "
+        "FROM analytics_marts.mart_league_season_goals ORDER BY league_code, season"
+    ),
+    "mart_team_ratings": (
+        "SELECT team_key, team_name, rated_matches, latest_elo, latest_elo_date::text "
+        "AS latest_elo_date, peak_elo, peak_elo_date::text AS peak_elo_date, lowest_elo, "
+        "lowest_elo_date::text AS lowest_elo_date FROM analytics_marts.mart_team_ratings "
+        "ORDER BY team_key"
+    ),
+}
+
+
+def mart_rows(conn: psycopg.Connection, mart: str) -> list[dict[str, object]]:
+    """Return the rows of ``mart`` with natural keys, numerics as text and dates as ISO text.
+
+    The shape and order match ``tests/fixtures/matches_transform.expected.json``.
+    """
+    with conn.cursor(row_factory=dict_row) as cur:
+        return [dict(row) for row in cur.execute(_MART_ROW_QUERIES[mart].encode()).fetchall()]

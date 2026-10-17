@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Compose smoke test (US2): migrate twice with no schema change, then ingest a fixture
-# through the container. Uses a throw-away project and a free host port; no dataset download.
+# Compose smoke test: migrate twice with no schema change, ingest a fixture through the
+# container, then run the dbt transform twice and check the mart row counts and the image
+# separation. Uses a throw-away project and a free host port; no dataset download.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -17,7 +18,7 @@ sed "s/^POSTGRES_PORT=.*/POSTGRES_PORT=${PORT}/" .env.example > "${ENV_FILE}"
 COMPOSE=(docker compose -p football_smoke --env-file "${ENV_FILE}")
 
 cleanup() {
-  "${COMPOSE[@]}" --profile ingest down -v --remove-orphans >/dev/null 2>&1 || true
+  "${COMPOSE[@]}" --profile ingest --profile transform down -v --remove-orphans >/dev/null 2>&1 || true
   rm -rf "${ENV_FILE}" "${FIXTURE_DIR}"
 }
 trap cleanup EXIT
@@ -33,7 +34,7 @@ structure() {
 }
 
 echo "==> build the image (never test a stale one)"
-"${COMPOSE[@]}" --profile ingest build
+"${COMPOSE[@]}" --profile ingest --profile transform build
 
 echo "==> db up"
 "${COMPOSE[@]}" up -d --wait db
@@ -56,5 +57,31 @@ REPORT="$("${COMPOSE[@]}" run --rm -T -v "${FIXTURE_DIR}:/fixtures:ro" ingest \
   football-stats ingest --source-file /fixtures/matches_valid.csv | tail -n 1)"
 echo "${REPORT}"
 python3 -c 'import json, sys; r = json.loads(sys.argv[1]); assert r["status"] == "succeeded" and r["rows_loaded"] == 12, r' "${REPORT}"
+
+mart_counts() {
+  "${COMPOSE[@]}" exec -T db psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -At -c \
+    "SELECT (SELECT count(*) FROM analytics_marts.mart_team_form) || '|' ||
+            (SELECT count(*) FROM analytics_marts.mart_league_season_home_advantage) || '|' ||
+            (SELECT count(*) FROM analytics_marts.mart_league_season_goals) || '|' ||
+            (SELECT count(*) FROM analytics_marts.mart_team_ratings)"
+}
+
+# matches_valid.csv: 12 matches -> 24 team-form rows, 2 league-seasons, 6 teams.
+EXPECTED_COUNTS="24|2|2|6"
+for run in first second; do
+  echo "==> transform (${run} run)"
+  "${COMPOSE[@]}" run --rm -T transform
+  COUNTS="$(mart_counts)"
+  echo "mart counts: ${COUNTS}"
+  [ "${COUNTS}" = "${EXPECTED_COUNTS}" ] || { echo "unexpected mart counts (want ${EXPECTED_COUNTS})" >&2; exit 1; }
+done
+
+echo "==> image separation: no dbt in the app image, no football_stats in the transform image"
+if docker run --rm --entrypoint python football-stats:local -c "import dbt" >/dev/null 2>&1; then
+  echo "dbt is importable in the app image" >&2; exit 1
+fi
+if docker run --rm --entrypoint python football-stats-transform:local -c "import football_stats" >/dev/null 2>&1; then
+  echo "football_stats is importable in the transform image" >&2; exit 1
+fi
 
 echo "smoke test passed"

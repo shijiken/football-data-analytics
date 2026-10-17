@@ -21,14 +21,23 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "ruff",
-    "mypy",
+    # capped by dbt-core 1.11's pathspec<0.13; mypy>=2 needs pathspec>=1 (003 decisions I-2)
+    "mypy>=1.19.1,<2",
     "pytest>=8,<9",
     "testcontainers>=4,<5",
     "pytest-randomly",
     "pytest-socket",
     "jsonschema",
     "types-jsonschema",
+    "types-pyyaml>=6.0.12.20260906",
 ]
+transform = [
+    "dbt-core>=1.11.15,<1.12",
+    "dbt-postgres>=1.11.0,<1.12",
+]
+
+[tool.uv]
+default-groups = ["dev", "transform"]
 
 [tool.ruff]
 line-length = 100

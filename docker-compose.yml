@@ -41,6 +41,23 @@ services:
     profiles: ["ingest"]
     restart: "no"
 
+  transform:
+    image: football-stats-transform:local
+    build:
+      context: .
+      target: transform
+    environment:
+      DBT_PG_HOST: db
+      DBT_PG_PORT: "5432"
+      DBT_PG_USER: ${POSTGRES_USER}
+      DBT_ENV_SECRET_PG_PASSWORD: ${POSTGRES_PASSWORD}
+      DBT_PG_DBNAME: ${POSTGRES_DB}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    profiles: ["transform"]
+    restart: "no"
+
 volumes:
   pgdata:
   rawdata:

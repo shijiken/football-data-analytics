@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: football
+    schema: public
+    tables:
+      - name: leagues
+      - name: teams
+      - name: matches

@@ -1,0 +1,92 @@
+version: 2
+
+models:
+  - name: stg_leagues
+    description: One row per league that has loaded matches.
+    columns:
+      - name: league_code
+        data_tests:
+          - unique
+          - not_null
+
+  - name: stg_teams
+    description: One row per team.
+    columns:
+      - name: team_id
+        data_tests:
+          - unique
+          - not_null
+      - name: team_key
+        data_tests:
+          - unique
+          - not_null
+      - name: team_name
+
+  - name: stg_matches
+    description: >
+      One row per loaded match with season, per-side result and points, and total goals.
+    columns:
+      - name: match_id
+        data_tests:
+          - unique
+          - not_null
+      - name: league_code
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_leagues')
+                field: league_code
+      - name: match_date
+      - name: season_start_year
+        data_tests:
+          - not_null
+      - name: season
+        data_tests:
+          - not_null
+      - name: home_team_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_teams')
+                field: team_id
+      - name: away_team_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_teams')
+                field: team_id
+      - name: home_goals
+      - name: away_goals
+      - name: total_goals
+      - name: ft_result
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [H, D, A]
+      - name: home_result
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [W, D, L]
+      - name: away_result
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [W, D, L]
+      - name: home_points
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [0, 1, 3]
+                quote: false
+      - name: away_points
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [0, 1, 3]
+                quote: false
+      - name: home_elo
+      - name: away_elo
