@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "football-stats/run-report.schema.json",
+  "title": "football-stats ingest report (stdout); also the generic failure shape of verify",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status", "run_id", "source_url", "source_sha256", "raw_path",
+        "rows_read", "rows_loaded", "rows_excluded", "excluded_by_reason",
+        "matches_inserted", "matches_updated", "matches_unchanged", "duration_seconds"
+      ],
+      "properties": {
+        "status": {"const": "succeeded"},
+        "run_id": {"type": "integer", "minimum": 1},
+        "source_url": {"type": "string"},
+        "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "raw_path": {"type": "string"},
+        "rows_read": {"type": "integer", "minimum": 0},
+        "rows_loaded": {"type": "integer", "minimum": 0},
+        "rows_excluded": {"type": "integer", "minimum": 0},
+        "excluded_by_reason": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["missing_field", "invalid_date", "missing_result", "invalid_value", "same_team", "duplicate"],
+          "properties": {
+            "missing_field": {"type": "integer", "minimum": 0},
+            "invalid_date": {"type": "integer", "minimum": 0},
+            "missing_result": {"type": "integer", "minimum": 0},
+            "invalid_value": {"type": "integer", "minimum": 0},
+            "same_team": {"type": "integer", "minimum": 0},
+            "duplicate": {"type": "integer", "minimum": 0}
+          }
+        },
+        "matches_inserted": {"type": "integer", "minimum": 0},
+        "matches_updated": {"type": "integer", "minimum": 0},
+        "matches_unchanged": {"type": "integer", "minimum": 0},
+        "duration_seconds": {"type": "number", "minimum": 0}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "error", "message"],
+      "properties": {
+        "status": {"const": "failed"},
+        "error": {
+          "enum": ["unexpected_error", "configuration_error", "source_unavailable", "missing_columns",
+                   "malformed_source", "concurrent_run", "database_error", "accounting_error"]
+        },
+        "message": {"type": "string"}
+      }
+    }
+  ]
+}

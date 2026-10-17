@@ -1,0 +1,20 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.5"
+      - run: uv sync --frozen
+      - run: scripts/check.sh
+      - name: Build image
+        run: docker build -t football-stats:ci .
+      - name: Compose smoke test
+        run: scripts/smoke_compose.sh
