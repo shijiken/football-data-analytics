@@ -194,3 +194,69 @@ behaviour, not text.
   - every value is a `${POSTGRES_*}` reference or a credential-free literal.
 - The Dockerfile test keeps its structural checks (`--no-default-groups`, `--only-group transform`,
   `app` last). Those are the behaviour-bearing facts of R2.
+
+## Implementation deviations
+
+### I-1: Recovery test starts from a database that already holds models
+Deviation: `test_build_fails_and_names_failing_test` now runs one successful build on its database
+before the failing build (plan-review-2, finding 1, optional MINOR, adopted). The failing test is
+still injected on `stg_matches.home_points` as in T010 and quickstart §3, not on a mart column.
+
+Reasoning: the failing build then re-creates the staging views and skips the four marts, which keep
+the tables of the first build, so the unmodified rerun is shown to recover over existing models
+(published tables, primary-key names that alternate between builds) and not only from an empty
+schema. Injecting on a mart column, as the review also suggested, would have changed T010's
+"downstream of `stg_matches` is skipped" assertion and quickstart §3, and would not make the table
+contents differ either, since both builds read the same data; so only the first part was taken.
+This is the most conservative reading of the request. dbt invocations in the suite go from 8 to 9
+(research.md R5): the README says nine.
+
+### I-2: Adding dbt moved mypy and pathspec in `uv.lock`
+Deviation: `uv add --group transform ...` re-resolved the lock with `pathspec 0.12.1` (dbt-core
+1.11 requires `pathspec<0.13`), which made uv select `mypy 1.19.1` instead of `2.4.0` and drop
+`ast-serialize`. T001 asked only for dbt, `types-PyYAML` and a check that polars 1.44.2 and pandera
+0.34.1 are unchanged; both are unchanged, there is no pandas, numpy or
+`dbt-core-experimental-parser`, and `uv.lock` has 35 new packages plus `types-pyyaml`.
+
+Reasoning: the downgrade is forced by dbt's own pin, `scripts/check.sh` passes unchanged under
+mypy 1.19.1 (`--strict`), and holding mypy 2.4.0 would need a dbt-core line that the plan excludes.
+Accepted; no code change.
+
+### I-3: T036 measured Q3 differently from research.md R14
+Deviation: the cross-league date range (`matches` between two dates, Q3) took 3.240 ms before the
+candidate index with an Index Only Scan on `matches_natural_key` (980 buffers). Research R14
+recorded 9.3 ms and 913 buffers on a copy. With the candidate `matches (match_date)` it took
+0.057 ms (3 buffers), as expected (R14: 0.05 ms).
+
+Reasoning: same plan shape and the same verdict; only the absolute "before" number differs (cache
+state and machine load: the first of five runs was 7.92 ms, the other four 3.2 ms to 3.3 ms, and
+the median is 3.240 ms). No model or planned consumer issues this query, so the candidate stays
+rejected and is recorded as a measured negative result in the README. Everything else matched the
+planning profile exactly: 474,946 / 789 / 1,221 (783 rated) rows, E0 2015/16 `380 | 0.4132 |
+0.2816 | 0.3053`, 75 nodes, 0 failures, 7 of 7 model hashes equal across two builds. The rejected
+candidates changed the staging/mart source scan (Q2) by 2 %, far below the 20 % threshold, so no
+plan deviation and no migration is needed.
+
+### I-4: Two primary keys were measured outside the script
+Deviation: `scripts/explain_transforms.sql` (11 variants, fixed by the plan and by T024) covers the
+primary keys of `mart_league_season_home_advantage` (Q5) and `mart_team_ratings` (Q6) only. The
+README must hold a row for every primary key, so the keys of `mart_team_form` and
+`mart_league_season_goals` were measured once by hand with the same method (5 x `EXPLAIN (ANALYZE,
+BUFFERS)`, constraint dropped inside `BEGIN ... ROLLBACK`, median reported) and are marked "ad hoc"
+in the README, with their results: 0.030 -> 0.025 ms (no effect) and 0.035 -> 0.014 ms.
+
+Reasoning: growing the script would change T024's expected count of 55 `Execution Time:` lines and
+the plan's variant list; the ad hoc runs leave the catalog unchanged (checked with `\di` afterwards).
+
+### I-5: README written once, with the measured numbers
+Deviation: T035 says to write the README with `TBD (T036)` cells and T036 to replace them. T034's
+test also forbids `TBD` in the README, so the real-data run (T036) was done first and the README was
+written with the final numbers in one step. No placeholder was ever committed.
+
+### I-6: `DbtResult.target_dir` is the artifact directory
+Deviation: data-model.md §5 reads `run_results.json` from `<target_dir>/target/` but
+`manifest.json` from `target_dir` itself. `DbtResult.target_dir` is the directory that
+`DBT_TARGET_PATH` points to (the one holding both files), and `dbt_env(url, home, target_dir)` still
+creates `<target_dir>/target` and `<target_dir>/logs` as specified.
+
+Reasoning: one consistent meaning for the field; no behaviour differs from the documented one.
