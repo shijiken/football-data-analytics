@@ -3,8 +3,8 @@
 import json
 
 import pytest
-from football_stats.data_contract import CURRENT_CONTRACT, PRE_CONTRACT, find_violations
 
+from football_stats.data_contract import CURRENT_CONTRACT, PRE_CONTRACT, find_violations
 from tests.conftest import fixture_path
 from tests.contract_cases import FULL_ROW
 from tests.stages import RUN_DATE, partition_file, partition_rows

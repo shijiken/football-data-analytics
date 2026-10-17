@@ -4,9 +4,9 @@ import datetime as dt
 from pathlib import Path
 
 import polars as pl
-from football_stats.data_contract import CURRENT_CONTRACT, DataContract
 
 from football_stats import clean, extract, validate
+from football_stats.data_contract import CURRENT_CONTRACT, DataContract
 from football_stats.source_contract import EXPECTED_COLUMNS
 
 #: Run date for pure-stage tests: after every fixture match date (latest 2022-02-07), in the past.
