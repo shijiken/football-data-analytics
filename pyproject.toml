@@ -28,7 +28,15 @@ dev = [
     "pytest-socket",
     "jsonschema",
     "types-jsonschema",
+    "types-pyyaml>=6.0.12.20260906",
 ]
+transform = [
+    "dbt-core>=1.11.15,<1.12",
+    "dbt-postgres>=1.11.0,<1.12",
+]
+
+[tool.uv]
+default-groups = ["dev", "transform"]
 
 [tool.ruff]
 line-length = 100
