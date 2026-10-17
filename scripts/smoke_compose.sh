@@ -10,6 +10,9 @@ ENV_FILE="$(mktemp)"
 # permission before Docker may read ~/Desktop or ~/Documents, which would hang an unattended run.
 FIXTURE_DIR="$(mktemp -d)"
 cp tests/fixtures/matches_valid.csv "${FIXTURE_DIR}/"
+# mktemp -d is 0700; the container runs as a different uid (10001), which must be able to read it.
+chmod 755 "${FIXTURE_DIR}"
+chmod 644 "${FIXTURE_DIR}/matches_valid.csv"
 sed "s/^POSTGRES_PORT=.*/POSTGRES_PORT=${PORT}/" .env.example > "${ENV_FILE}"
 COMPOSE=(docker compose -p football_smoke --env-file "${ENV_FILE}")
 
