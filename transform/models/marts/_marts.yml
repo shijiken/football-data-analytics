@@ -53,6 +53,8 @@ models:
         data_type: date
       - name: is_home
         data_type: boolean
+        data_tests:
+          - not_null
       - name: goals_for
         data_type: integer
       - name: goals_against

@@ -14,6 +14,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from tests.integration.helpers import REPO_ROOT
@@ -60,9 +61,9 @@ class DbtResult:
                 return str(result["compiled_code"])
         raise KeyError(test_name)
 
-    def manifest(self) -> dict[str, object]:
+    def manifest(self) -> dict[str, Any]:
         """Return the parsed ``manifest.json`` of the run."""
-        document: dict[str, object] = json.loads(
+        document: dict[str, Any] = json.loads(
             (self.target_dir / "manifest.json").read_text("utf-8")
         )
         return document

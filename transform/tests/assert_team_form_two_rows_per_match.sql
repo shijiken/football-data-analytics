@@ -21,6 +21,7 @@ home_side as (
         max(opponent_team_id) as opponent_team_id,
         max(league_code) as league_code,
         max(season) as season,
+        max(season_start_year) as season_start_year,
         max(match_date) as match_date,
         max(goals_for) as goals_for,
         max(goals_against) as goals_against,
@@ -41,6 +42,7 @@ away_side as (
         max(opponent_team_id) as opponent_team_id,
         max(league_code) as league_code,
         max(season) as season,
+        max(season_start_year) as season_start_year,
         max(match_date) as match_date,
         max(goals_for) as goals_for,
         max(goals_against) as goals_against,
@@ -84,6 +86,8 @@ where staged.match_id is null
     or away_side.points is distinct from staged.away_points
     or home_side.league_code is distinct from staged.league_code
     or away_side.league_code is distinct from staged.league_code
+    or home_side.season_start_year is distinct from staged.season_start_year
+    or away_side.season_start_year is distinct from staged.season_start_year
     or home_side.season is distinct from staged.season
     or away_side.season is distinct from staged.season
     or home_side.match_date is distinct from staged.match_date

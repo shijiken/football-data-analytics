@@ -260,3 +260,68 @@ Deviation: data-model.md §5 reads `run_results.json` from `<target_dir>/target/
 creates `<target_dir>/target` and `<target_dir>/logs` as specified.
 
 Reasoning: one consistent meaning for the field; no behaviour differs from the documented one.
+
+## Code review round 1 (reviews/code-review-1.md)
+
+All six findings are FIXED; none is rebutted. The dbt node count is now 76 (7 models and 69
+tests) because of C1-5. Planning documents that still say 75 (plan, tasks, quickstart) describe the
+original plan; the README and the code are authoritative.
+
+### C1-1: The recovery test cannot detect a rerun that fails to converge
+Finding: after the failing build the marts already equalled the reference, so the "recovery" assertion held before the rerun.
+
+Response: FIXED
+
+Reasoning: correct. Between the failing build and the rerun the test now damages the analytics
+schema: `DELETE` rows of `mart_team_form`, `UPDATE mart_team_ratings SET peak_elo = 0` and
+`DROP TABLE mart_league_season_goals`. It asserts that the drop is visible, that the two damaged
+marts differ from the reference, and only then reruns the unmodified project. The rerun must exit 0,
+cover `EXPECTED_MODELS`, have every model `success` and every test `pass`, and the full snapshot must
+equal the reference and `public` must equal its state before. Shown to fail when the rerun is
+skipped: with the rerun replaced by `dbt parse`, the test fails on the model-set assertion
+(`set() == {...}`); restored, it passes.
+
+### C1-2: The empty-database test passes vacuously for a missing model
+Finding: `continue` skipped any model that was not created.
+
+Response: FIXED
+
+Reasoning: the skip is gone. Every model in `ANALYTICS_MODELS` must exist (`to_regclass` not null)
+and have 0 rows, and all statuses must be `success` or `pass`.
+
+### C1-3: Make the mypy cap explicit
+Finding: the `<2` cap on mypy existed only through dbt's `pathspec<0.13`.
+
+Response: FIXED
+
+Reasoning: `pyproject.toml` now says `"mypy>=1.19.1,<2"` with a comment naming the cause and I-2;
+`uv lock` kept 1.19.1 (no other lock change). Note: if dbt relaxes its pin, drop the cap together
+with it.
+
+### C1-4: The ad hoc primary-key measurements cannot be reproduced
+Finding: the SQL of the two hand-run variants was not recorded.
+
+Response: FIXED
+
+Reasoning: the exact `BEGIN; ... DROP CONSTRAINT ...; EXPLAIN (ANALYZE, BUFFERS) ...; ROLLBACK;`
+blocks with the literal key values (`match_id = 100000`; `E0`, `2015/16`) are now in a fenced block in
+the README's measured section (the README test allows it). I-4 stands as written.
+
+### C1-5: Team-form invariant misses `season_start_year`; `is_home` has no `not_null`
+Finding: the real-data two-rows test did not compare `season_start_year`, and a NULL `is_home` row would escape both sides.
+
+Response: FIXED
+
+Reasoning: `season_start_year` is aggregated and compared for both sides in
+`assert_team_form_two_rows_per_match`, and `mart_team_form.is_home` has a `not_null` test (the second
+option of the finding; a per-match `count(*) <> 2` subquery would be a correlated scan of 475k rows
+for no extra coverage once `is_home` cannot be null). The change was run on the full database:
+`PASS=76 WARN=0 ERROR=0`. The mutation cases still detect their violations (the existing 9 cases pass).
+
+### C1-6: `DbtResult.manifest()` typing forced four `type: ignore`s
+Finding: a too-narrow return type forced suppressions, one without a reason.
+
+Response: FIXED
+
+Reasoning: `manifest()` returns `dict[str, Any]` (untyped JSON), `_manifest_nodes` accepts it, and the
+four ignores are gone; `mypy --strict` is clean.

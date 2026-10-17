@@ -21,7 +21,8 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "ruff",
-    "mypy",
+    # capped by dbt-core 1.11's pathspec<0.13; mypy>=2 needs pathspec>=1 (003 decisions I-2)
+    "mypy>=1.19.1,<2",
     "pytest>=8,<9",
     "testcontainers>=4,<5",
     "pytest-randomly",

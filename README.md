@@ -131,7 +131,7 @@ therefore split across two labels; `season_start_year` is the sortable form.
 follows source-file order on a fresh load); the form covers the up to five matches strictly before
 the current one. For peak and lowest Elo, ties go to the earliest date.
 
-`dbt build` exits 0 when every model is built and all 75 nodes (7 models and 68 data tests: keys,
+`dbt build` exits 0 when every model is built and all 76 nodes (7 models and 69 data tests: keys,
 relationships, accepted values, and six singular invariants that recompute the marts from staging)
 pass, 1 when a model or test fails, and 2 when dbt cannot run (a missing variable, no database).
 **After a non-zero exit the analytics schemas are not trustworthy until the next exit-0 run:** a
@@ -310,7 +310,7 @@ Engine 29.8.2 (Docker Desktop), PostgreSQL 17.6 in the Compose `db` service, war
 | Item | Value |
 |---|---|
 | SC-001 full build (target under 2 min): `time docker compose run --rm transform`, first / second | 9.3 s / 8.4 s wall time including container start; dbt's own time 4.47 s / 3.81 s |
-| SC-003 data-test failures | 0: `PASS=75 WARN=0 ERROR=0 SKIP=0` on both builds |
+| SC-003 data-test failures | 0: `PASS=75 WARN=0 ERROR=0 SKIP=0` on both builds; after code review round 1 added one test, a rerun gave `PASS=76` |
 | SC-004 second build identical | the md5 of all 7 models (ordered by key) is the same after both builds |
 | Rows | `mart_team_form` 474,946 (2 x 237,473); both league marts 789; `mart_team_ratings` 1,221 teams, 783 rated |
 | Spot check | E0 2015/16: 380 matches, shares 0.4132 / 0.2816 / 0.3053 |
@@ -331,6 +331,27 @@ Index and key measurements (FR-010, SC-005) from `scripts/explain_transforms.sql
 | `matches (match_date)` | Q2: the staging scan grouped by league-season, which every model repeats | 51.568 | 50.510 | Parallel Seq Scan -> Parallel Seq Scan | rejected: 2 % is noise; a full rebuild scans everything |
 | `matches (match_date)` | Q3: cross-league date range | 3.240 | 0.057 | Index Only Scan on the natural key, 980 buffers -> Index Only Scan on the candidate, 3 buffers | rejected for now: no model or planned consumer runs this query |
 | `matches (league_code, match_date)` | Q4: league plus date range | 0.082 | n/a | Index Only Scan on `matches_natural_key`, 5 buffers | rejected: the natural key already serves it |
+
+The two ad hoc rows were produced by this block (the same shape run 5 times per variant; the
+"after" variant is the same `EXPLAIN` without the `BEGIN` ... `DROP CONSTRAINT` lines):
+
+```sql
+BEGIN;
+SELECT conname AS pk FROM pg_constraint
+WHERE conrelid = 'analytics_marts.mart_team_form'::regclass AND contype = 'p' \gset
+ALTER TABLE analytics_marts.mart_team_form DROP CONSTRAINT :"pk";
+EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM analytics_marts.mart_team_form
+WHERE match_id = 100000 AND team_id = (SELECT home_team_id FROM public.matches WHERE match_id = 100000);
+ROLLBACK;
+
+BEGIN;
+SELECT conname AS pk FROM pg_constraint
+WHERE conrelid = 'analytics_marts.mart_league_season_goals'::regclass AND contype = 'p' \gset
+ALTER TABLE analytics_marts.mart_league_season_goals DROP CONSTRAINT :"pk";
+EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM analytics_marts.mart_league_season_goals
+WHERE league_code = 'E0' AND season = '2015/16';
+ROLLBACK;
+```
 
 Negative results are part of the answer: no index on `public.matches` helps the transform, so there
 is no Alembic migration in this feature. Indexes on `public` change only through Alembic; to

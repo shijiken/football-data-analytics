@@ -39,9 +39,7 @@ def test_second_build_is_identical(db_url: str, tmp_path: Path) -> None:
     assert c1 == c2
     assert p0 == p1 == p2
     models_in_manifest = {
-        str(n["name"])
-        for n in second.manifest()["nodes"].values()  # type: ignore[attr-defined]  # JSON shape
-        if n["resource_type"] == "model"
+        str(n["name"]) for n in second.manifest()["nodes"].values() if n["resource_type"] == "model"
     }
     assert set(a1) == models_in_manifest
     assert all(a1[m] for m in a1), "every model has fixture rows"

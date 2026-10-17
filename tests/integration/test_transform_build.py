@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
+import pytest
 import yaml
 from testcontainers.postgres import PostgresContainer
 
@@ -71,8 +72,8 @@ def _model_ids(statuses: dict[str, str]) -> set[str]:
     return {uid.removeprefix(prefix) for uid in statuses if uid.startswith(prefix)}
 
 
-def _manifest_nodes(manifest: dict[str, object], resource_type: str) -> list[dict[str, Any]]:
-    nodes: dict[str, dict[str, Any]] = manifest["nodes"]  # type: ignore[assignment]  # JSON shape
+def _manifest_nodes(manifest: dict[str, Any], resource_type: str) -> list[dict[str, Any]]:
+    nodes: dict[str, dict[str, Any]] = manifest["nodes"]
     return [n for n in nodes.values() if n["resource_type"] == resource_type]
 
 
@@ -130,9 +131,8 @@ def test_manifest_has_no_hooks_and_only_analytics_schemas(transformed_db: Transf
         assert node["schema"] in {"analytics_staging", "analytics_marts"}, node["name"]
         assert node["config"]["pre-hook"] == [], node["name"]
         assert node["config"]["post-hook"] == [], node["name"]
-    node_ids: dict[str, object] = manifest["nodes"]  # type: ignore[assignment]  # JSON shape
-    assert not [uid for uid in node_ids if uid.startswith("operation.")]
-    sources: dict[str, dict[str, Any]] = manifest["sources"]  # type: ignore[assignment]
+    assert not [uid for uid in manifest["nodes"] if uid.startswith("operation.")]
+    sources: dict[str, dict[str, Any]] = manifest["sources"]
     assert sources
     assert {s["schema"] for s in sources.values()} == {"public"}
 
@@ -226,11 +226,29 @@ def test_build_fails_and_names_failing_test(
     for name in downstream:
         assert statuses[f"model.{PROJECT}.{name}"] == "skipped", name
 
-    # (2) recovery on the same database with the unmodified project
+    # (2) put the marts into a genuinely partial state that only a full rebuild repairs
+    with psycopg.connect(db_url) as conn, psycopg.connect(transformed_db.url) as reference:
+        wanted = helpers.analytics_snapshot(reference)
+        with conn.transaction():
+            conn.execute(b"DELETE FROM analytics_marts.mart_team_form WHERE team_match_number > 2")
+            conn.execute(b"UPDATE analytics_marts.mart_team_ratings SET peak_elo = 0")
+            conn.execute(b"DROP TABLE analytics_marts.mart_league_season_goals")
+        with pytest.raises(psycopg.errors.UndefinedTable):
+            helpers.analytics_snapshot(conn)
+        conn.rollback()
+        damaged = helpers.analytics_snapshot(conn, ("mart_team_form", "mart_team_ratings"))
+        assert damaged["mart_team_form"] != wanted["mart_team_form"]
+        assert damaged["mart_team_ratings"] != wanted["mart_team_ratings"]
+
+    # (3) recovery on the same database with the unmodified project: every node runs and passes
     rerun = run_dbt(["build"], dbt_env(db_url, home, tmp_path / "dbt_rerun"))
     assert rerun.returncode == 0, rerun.stdout
-    with psycopg.connect(db_url) as conn, psycopg.connect(transformed_db.url) as reference:
-        assert helpers.analytics_snapshot(conn) == helpers.analytics_snapshot(reference)
+    rerun_statuses = rerun.statuses()
+    assert _model_ids(rerun_statuses) == EXPECTED_MODELS
+    assert {s for uid, s in rerun_statuses.items() if uid.startswith("model.")} == {"success"}
+    assert {s for uid, s in rerun_statuses.items() if uid.startswith("test.")} == {"pass"}
+    with psycopg.connect(db_url) as conn:
+        assert helpers.analytics_snapshot(conn) == wanted
         assert helpers.public_state(conn) == p0
 
 
@@ -239,12 +257,12 @@ def test_build_on_empty_database_succeeds(empty_db_url: str, tmp_path: Path) -> 
     helpers.upgrade(empty_db_url)
     result = run_dbt(["build"], dbt_env(empty_db_url, tmp_path / "home", tmp_path / "dbt"))
     assert result.returncode == 0, result.stdout
+    assert set(result.statuses().values()) <= {"success", "pass"}
     with psycopg.connect(empty_db_url) as conn:
         for name, relation in helpers.ANALYTICS_MODELS.items():
             exists = conn.execute(b"SELECT to_regclass(%s)", (relation,)).fetchone()
             assert exists is not None
-            if exists[0] is None:
-                continue
+            assert exists[0] is not None, f"{name} was not built"
             count = conn.execute(f"SELECT count(*) FROM {relation}".encode()).fetchone()
             assert count == (0,), name
 
