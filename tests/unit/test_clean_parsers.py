@@ -2,8 +2,8 @@ import datetime as dt
 
 import polars as pl
 import pytest
-from football_stats.clean import parse_frame
 
+from football_stats.clean import parse_frame
 from football_stats.source_contract import COLUMN_SPECS, EXPECTED_COLUMNS
 
 DB_COLUMN = {spec.source_name: spec.db_column for spec in COLUMN_SPECS}

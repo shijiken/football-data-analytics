@@ -1,9 +1,9 @@
 import pytest
-from football_stats.extract import read_header
-from football_stats.validate import check_header
 
 from football_stats.errors import MalformedSourceError, MissingColumnsError
+from football_stats.extract import read_header
 from football_stats.source_contract import EXPECTED_COLUMNS
+from football_stats.validate import check_header
 from tests.conftest import fixture_path
 
 

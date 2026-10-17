@@ -2,9 +2,9 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-from football_stats.extract import check_structure, read_header, read_source
 
 from football_stats.errors import MalformedSourceError
+from football_stats.extract import check_structure, read_header, read_source
 from football_stats.source_contract import EXPECTED_COLUMNS
 from tests.conftest import fixture_path
 
